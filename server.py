@@ -248,12 +248,14 @@ def make_handler(inst: Instance):
                                        origin.startswith("http://localhost:")):
                         return _json(self, {"ok": False, "message": "来源不被允许"}, 403)
                 if p.startswith("/api/platforms/"):
-                    from engine.platforms import start_login, start_logout, clear_local
+                    from engine.platforms import start_logout, clear_local, start_password_login
                     platform = str(body.get("platform") or "").strip()
                     if not platform:
                         return _json(self, {"ok": False, "message": "缺少平台参数"}, 400)
-                    if p == "/api/platforms/login":
-                        r = start_login(inst.data_dir, platform)
+                    if p == "/api/platforms/login_password":
+                        r = start_password_login(inst.data_dir, platform,
+                                                 str(body.get("username") or ""),
+                                                 str(body.get("password") or ""))
                     elif p == "/api/platforms/logout":
                         r = start_logout(inst.data_dir, platform)
                     elif p == "/api/platforms/clear":

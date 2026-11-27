@@ -20,7 +20,8 @@ from .util import iso_bj
 PLATFORMS = {
     "weibo": {
         "name": "微博",
-        "login_url": "https://weibo.com/login.php",
+        # 直接进 passport 登录页；weibo.com/login.php 会先跳访客页/首页，拿不到账号密码输入框
+        "login_url": "https://passport.weibo.com/sso/signin?entry=miniblog&source=miniblog",
         "logout_url": "https://passport.weibo.com/sso/signout",
         "auth_cookies": ("SUB", "SUBP"),
         "hosts": ("weibo.com", "weibo.cn"),
@@ -73,10 +74,148 @@ PLATFORMS = {
 _STATUS_FILE = "platform_login.json"
 _STATUS_VERSION = 1
 _LOCK = threading.RLock()
-_WINDOWS = {}          # platform -> {"window": win, "mode": login|logout}
+_WINDOWS = {}          # platform -> {"window": win, "mode": login|logout|password}
 _POLLS = {}
+_JOBS = {}             # platform -> {"state": running|ok|fail, "message": str, "started": str}
 _RENDER_LOCK = threading.Lock()
 _LAST_ERROR = ""
+
+# 应用内账号密码登录：先把平台页面切到账号/密码表单，再填入并提交。
+# 页面本身不显示给用户，只作为后台 WebView2 会话；用户看到的是应用自己的登录弹窗。
+_PREPARE_JS = {
+    "weibo": r"""
+(function(){
+  function t(e){return (e.innerText||e.textContent||'').replace(/\s+/g,' ').trim()}
+  function v(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'}
+  var all=document.querySelectorAll('div,button,a');
+  for(var i=0;i<all.length;i++){if(v(all[i])&&t(all[i])==='登录/注册'){all[i].click();return 'open'}}
+  return 'no';
+})()
+""",
+    "weibo_account": r"""
+(function(){
+  function t(e){return (e.innerText||e.textContent||'').replace(/\s+/g,' ').trim()}
+  function v(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'}
+  var all=document.querySelectorAll('a,div,button');
+  for(var i=0;i<all.length;i++){if(v(all[i])&&t(all[i])==='账号登录'){all[i].click();return 'account'}}
+  return 'no';
+})()
+""",
+    "baidu": r"""
+(function(){
+  var b=document.getElementById('TANGRAM__PSP_3__footerULoginBtn');
+  if(b){b.click();return 'account'}
+  return 'no';
+})()
+""",
+    "douyin": r"""
+(function(){
+  function t(e){return (e.innerText||e.textContent||'').replace(/\s+/g,' ').trim()}
+  function v(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'}
+  var all=document.querySelectorAll('button,div,span');
+  for(var i=0;i<all.length;i++){if(v(all[i])&&t(all[i])==='登录'){all[i].click();return 'open'}}
+  return 'no';
+})()
+""",
+    "bilibili": r"(function(){return 'ready';})()",
+    "zhihu": r"""
+(function(){
+  function t(e){return (e.innerText||e.textContent||'').replace(/\s+/g,' ').trim()}
+  function v(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'}
+  var all=document.querySelectorAll('div,button,a');
+  for(var i=0;i<all.length;i++){if(v(all[i])&&t(all[i])==='密码登录'){all[i].click();return 'password-tab'}}
+  return 'no';
+})()
+""",
+}
+
+_FILL_JS = r"""
+(function(payload){
+  function vis(e){
+    if(!e) return false;
+    var r=e.getBoundingClientRect(), c=getComputedStyle(e);
+    return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'&&!e.disabled;
+  }
+  function first(sel, kind){
+    for(var i=0;i<sel.length;i++){
+      var nodes=[];
+      try{nodes=document.querySelectorAll(sel[i])}catch(e){continue}
+      for(var j=0;j<nodes.length;j++){
+        var n=nodes[j];
+        if(!vis(n)) continue;
+        if(kind==='pass' && n.type!=='password') continue;
+        if(kind==='user' && (n.type==='password'||n.type==='hidden'||n.type==='checkbox')) continue;
+        var ph=(n.getAttribute('placeholder')||'');
+        if(kind==='user' && /搜索|search/i.test(ph)) continue;
+        return n;
+      }
+    }
+    return null;
+  }
+  function setv(el, val){
+    var proto=(el.tagName==='TEXTAREA'?HTMLTextAreaElement:HTMLInputElement).prototype;
+    var desc=Object.getOwnPropertyDescriptor(proto,'value');
+    try{desc.set.call(el,val)}catch(e){el.value=val}
+    el.dispatchEvent(new Event('input',{bubbles:true}));
+    el.dispatchEvent(new Event('change',{bubbles:true}));
+    el.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'a'}));
+  }
+  var u=first(payload.user||[],'user');
+  var p=first(payload.pass||[],'pass');
+  if(!u || !p) return {ok:false, reason:'没有找到账号/密码输入框'};
+  setv(u,payload.username); setv(p,payload.password);
+  var btn=null;
+  var sels=payload.submit||[];
+  for(var i=0;i<sels.length && !btn;i++){
+    var nodes=[]; try{nodes=document.querySelectorAll(sels[i])}catch(e){continue}
+    for(var j=0;j<nodes.length;j++){
+      var n=nodes[j];
+      if(!vis(n)) continue;
+      var tx=(n.innerText||n.value||'').replace(/\s+/g,' ').trim();
+      if(n.tagName==='BUTTON' && tx && !/登录|登 录/.test(tx)) continue;
+      btn=n; break;
+    }
+  }
+  if(!btn){
+    var all=document.querySelectorAll('button,div,a,input[type=submit]');
+    for(var k=0;k<all.length;k++){
+      var txt=(all[k].innerText||all[k].value||'').replace(/\s+/g,' ').trim();
+      if(vis(all[k])&&(txt==='登录'||txt==='登录/注册')){btn=all[k];break}
+    }
+  }
+  if(btn){ btn.click(); return {ok:true, submit:'click'} }
+  if(p.form && p.form.requestSubmit){ p.form.requestSubmit(); return {ok:true, submit:'form'} }
+  return {ok:false, reason:'没有找到登录按钮'};
+})(__PAYLOAD__)
+"""
+
+_PASSWORD_RULES = {
+    "weibo": {
+        "user": ["input[placeholder*='手机号']", "input[placeholder*='账号']", "input[type='text']"],
+        "pass": ["input[type='password']"],
+        "submit": ["button"],
+    },
+    "baidu": {
+        "user": ["#TANGRAM__PSP_3__userName", "input[name='userName']"],
+        "pass": ["#TANGRAM__PSP_3__password", "input[name='password']"],
+        "submit": ["#TANGRAM__PSP_3__submit", "input[type='submit']"],
+    },
+    "douyin": {
+        "user": ["input[placeholder*='手机号']", "input[placeholder*='账号']", "input[type='text']"],
+        "pass": ["input[type='password']"],
+        "submit": ["button"],
+    },
+    "bilibili": {
+        "user": ["input[placeholder*='账号']", "input[type='text']"],
+        "pass": ["input[placeholder*='密码']", "input[type='password']"],
+        "submit": [".btn_primary", "button"],
+    },
+    "zhihu": {
+        "user": ["input[name='username']", "input[placeholder*='手机号或邮箱']"],
+        "pass": ["input[name='password']", "input[placeholder*='密码']"],
+        "submit": ["button.SignFlow-submitButton", "button"],
+    },
+}
 
 _JS_EXTRACT = r"""
 (function(){
@@ -147,6 +286,7 @@ def _platform_row(data_dir: str, key: str) -> dict:
     conf = PLATFORMS[key]
     saved = (_load(data_dir).get("platforms") or {}).get(key) or {}
     active = _WINDOWS.get(key)
+    job = _JOBS.get(key) or {}
     return {
         "key": key,
         "name": conf["name"],
@@ -156,6 +296,7 @@ def _platform_row(data_dir: str, key: str) -> dict:
         "last_check": saved.get("last_check") or "",
         "active": bool(active),
         "mode": (active or {}).get("mode") or "",
+        "job": {"state": job.get("state") or "", "message": job.get("message") or ""},
     }
 
 
@@ -314,10 +455,131 @@ def start_logout(data_dir: str, platform: str) -> dict:
         return {"ok": False, "message": "打开退出窗口失败：%s" % _LAST_ERROR}
 
 
+def _set_job(platform: str, state: str, message: str) -> None:
+    with _LOCK:
+        _JOBS[platform] = {"state": state, "message": message, "started": iso_bj()}
+
+
+def _password_worker(platform: str, data_dir: str, window, username: str, password: str) -> None:
+    """后台 WebView2 里把账号密码填进平台表单；页面不显示给用户。"""
+    try:
+        if not window.events.shown.wait(12):
+            _set_job(platform, "fail", "登录窗口没有就绪")
+            return
+        try:
+            window.hide()
+        except Exception:
+            pass
+        window.events.loaded.clear()
+        window.load_url(PLATFORMS[platform]["login_url"])
+        if not window.events.loaded.wait(22):
+            _set_job(platform, "fail", "平台登录页加载超时")
+            return
+        time.sleep(2.2)
+        # 已经有该平台登录 Cookie 时不再提交账号密码：否则旧会话会让任何假密码都显示“登录成功”。
+        try:
+            if _logged(window.get_cookies(), platform):
+                _set_job(platform, "ok", "当前已是登录状态，无需再次登录")
+                return
+        except Exception:
+            pass
+        try:
+            window.evaluate_js(_PREPARE_JS.get(platform, "(function(){return 'ready'})()"))
+            if platform == "weibo":
+                time.sleep(2.5)
+                window.evaluate_js(_PREPARE_JS["weibo_account"])
+                time.sleep(2.2)
+            else:
+                time.sleep(1.5)
+        except Exception:
+            pass
+
+        payload = {
+            "username": username,
+            "password": password,
+            "user": _PASSWORD_RULES[platform]["user"],
+            "pass": _PASSWORD_RULES[platform]["pass"],
+            "submit": _PASSWORD_RULES[platform]["submit"],
+        }
+        try:
+            res = window.evaluate_js(_FILL_JS.replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False)))
+        except Exception as e:
+            _set_job(platform, "fail", "提交登录表单失败：%s" % type(e).__name__)
+            return
+        if not isinstance(res, dict) or not res.get("ok"):
+            reason = (res or {}).get("reason") if isinstance(res, dict) else ""
+            _set_job(platform, "fail", reason or "没有找到该平台的账号密码表单")
+            return
+
+        _set_job(platform, "running", "已提交登录，正在等待平台返回…")
+        deadline = time.time() + 32
+        while time.time() < deadline:
+            try:
+                if window.events.closed.is_set():
+                    break
+            except Exception:
+                pass
+            try:
+                logged, _ = _apply_cookies(data_dir, platform, window, "password")
+            except Exception:
+                break
+            if logged:
+                _set_job(platform, "ok", "登录成功")
+                return
+            time.sleep(1.2)
+        _set_job(platform, "fail", "登录未完成：可能需要验证码/短信验证，或账号密码不正确")
+    finally:
+        with _LOCK:
+            cur = _WINDOWS.get(platform)
+            if cur and cur.get("window") is window:
+                _WINDOWS.pop(platform, None)
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
+
+def start_password_login(data_dir: str, platform: str, username: str, password: str) -> dict:
+    """应用内账号密码登录：校验参数后开一个隐藏 WebView2 后台提交，不把页面给用户看。"""
+    global _LAST_ERROR
+    if platform not in PLATFORMS:
+        return {"ok": False, "message": "未知平台"}
+    username = (username or "").strip()
+    if not username or not password:
+        return {"ok": False, "message": "请填写账号和密码"}
+    with _LOCK:
+        if _WINDOWS.get(platform):
+            return {"ok": True, "active": True, "message": "该平台已有登录窗口在运行，请稍候"}
+        _JOBS[platform] = {"state": "running", "message": "正在准备登录…", "started": iso_bj()}
+    if not _webview_ready():
+        _set_job(platform, "fail", "当前版本无法创建内置登录窗口，请确认 WebView2 运行库已安装")
+        return {"ok": False, "message": "当前版本无法创建内置登录窗口"}
+    conf = PLATFORMS[platform]
+    try:
+        import webview
+        window = webview.create_window(
+            "日常小助手 · 正在登录%s" % conf["name"], "about:blank",
+            width=1000, height=760, minimized=True, min_size=(800, 500), text_select=True)
+        if window is None:
+            raise RuntimeError("窗口创建被取消")
+        with _LOCK:
+            _WINDOWS[platform] = {"window": window, "mode": "password"}
+        threading.Thread(target=_password_worker,
+                         args=(platform, data_dir, window, username, password),
+                         daemon=True, name="platform-password-" + platform).start()
+        _LAST_ERROR = ""
+        return {"ok": True, "active": True, "message": "正在应用内登录%s…" % conf["name"]}
+    except Exception as e:
+        _LAST_ERROR = "%s: %s" % (type(e).__name__, str(e)[:120])
+        _set_job(platform, "fail", "打开登录窗口失败：%s" % _LAST_ERROR)
+        return {"ok": False, "message": "打开登录窗口失败：%s" % _LAST_ERROR}
+
+
 def clear_local(data_dir: str, platform: str) -> dict:
     if platform not in PLATFORMS:
         return {"ok": False, "message": "未知平台"}
     with _LOCK:
+        _JOBS.pop(platform, None)
         d = _load(data_dir)
         row = (d.setdefault("platforms", {})).setdefault(platform, {})
         row["logged_in"] = False

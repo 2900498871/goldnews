@@ -42,16 +42,23 @@
   function ok(d) { return d && d.data && d.data.ok !== false; }
 
   /* ---------------- 平台登录 ---------------- */
-  var PLAT = null, PLAT_TIMER = null;
+  var PLAT = null, PLAT_TIMER = null, PLAT_CUR = '', PLAT_JOB_TIMER = null;
   var PLAT_META = [
-    { key: 'weibo', name: '微博' }, { key: 'baidu', name: '百度' },
-    { key: 'douyin', name: '抖音' }, { key: 'bilibili', name: 'B站' },
-    { key: 'zhihu', name: '知乎' }
+    { key: 'weibo', name: '微博', short: '微', color: '#E6162D' },
+    { key: 'baidu', name: '百度', short: '百', color: '#2932E1' },
+    { key: 'douyin', name: '抖音', short: '抖', color: '#161823' },
+    { key: 'bilibili', name: 'B站', short: 'B', color: '#FB7299' },
+    { key: 'zhihu', name: '知乎', short: '知', color: '#1772F6' }
   ];
+  function platformMeta(key) {
+    return PLAT_META.filter(function (x) { return x.key === key; })[0] || { key: key, name: key, short: key.slice(0, 1), color: '#2456C4' };
+  }
   function platformState(p) {
     if (!p) return '未登录';
+    if (p.job && p.job.state === 'running') return p.job.message || '正在登录…';
     if (p.active) return p.mode === 'logout' ? '正在退出…' : '登录窗口已打开，完成后关闭即可';
     if (p.logged_in) return '已登录' + (p.last_login ? ' · 上次 ' + fmtBj(p.last_login) : '');
+    if (p.job && p.job.state === 'fail' && p.job.message) return p.job.message;
     return '未登录';
   }
   function platformRowsHtml() {
@@ -63,9 +70,11 @@
     return PLAT_META.map(function (m) {
       var p = (PLAT.platforms || []).filter(function (x) { return x.key === m.key; })[0] || {};
       var active = !!p.active, logged = !!p.logged_in;
-      var loginTxt = active ? (p.mode === 'logout' ? '退出中…' : '请完成登录') : '登录';
-      var loginBtn = '<button class="btn sm pri" onclick="platformLogin(\'' + m.key + '\')"' +
-        (active || PLAT.supported === false ? ' disabled' : '') + '>' + loginTxt + '</button>';
+      var jobRunning = !!(p.job && p.job.state === 'running');
+      var jobFailed = !!(p.job && p.job.state === 'fail' && p.job.message);
+      var loginTxt = jobRunning ? '登录中…' : (active ? (p.mode === 'logout' ? '退出中…' : '请完成登录') : '登录');
+      var loginBtn = '<button class="btn sm pri" onclick="openPlatformLogin(\'' + m.key + '\')"' +
+        (active || jobRunning || PLAT.supported === false ? ' disabled' : '') + '>' + loginTxt + '</button>';
       var outBtn = logged || (active && p.mode === 'logout')
         ? '<button class="btn sm" onclick="platformLogout(\'' + m.key + '\')"' +
           (active && p.mode === 'logout' ? ' disabled' : '') + '>退出账号</button>' : '';
@@ -74,7 +83,7 @@
       return '<div class="prow"><div><div class="pname">' + esc(m.name) + '</div>' +
         '<div class="pstate ' + (logged ? 'on' : 'off') + '">' +
         (logged ? '<b>已登录</b>' : '<b>未登录</b>') +
-        (active ? ' · ' + esc(platformState(p)) : (p.last_login ? ' · 上次 ' + esc(fmtBj(p.last_login)) : '')) +
+        (active || jobRunning || jobFailed ? ' · ' + esc(platformState(p)) : (p.last_login ? ' · 上次 ' + esc(fmtBj(p.last_login)) : '')) +
         '</div></div><div class="pact">' + loginBtn + outBtn + clearBtn + '</div></div>';
     }).join('');
   }
@@ -103,13 +112,6 @@
   function stopPlatformPoll() {
     if (PLAT_TIMER) { clearInterval(PLAT_TIMER); PLAT_TIMER = null; }
   }
-  function platformLogin(key, note) {
-    return api('/api/platforms/login', 'POST', { platform: key }).then(function (r) {
-      var d = (r && r.data) || {};
-      toast(ok(r) ? (note || d.message || '已打开登录窗口') : (d.message || '打开登录窗口失败'));
-      loadPlatforms(true); startPlatformPoll();
-    }).catch(function () { toast('打开登录窗口失败'); });
-  }
   function platformLogout(key) {
     var name = (PLAT_META.filter(function (x) { return x.key === key; })[0] || {}).name || key;
     if (!confirm('将打开' + name + '退出页面；确认退出后本机会清除该平台登录状态。继续？')) return;
@@ -127,10 +129,116 @@
       loadPlatforms(true);
     }).catch(function () { toast('清除登录记录失败'); });
   }
+
+  function platMsg(text, cls) {
+    var el = $('platMsg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'plmsg' + (cls ? ' ' + cls : '');
+  }
+  function platTabsHtml() {
+    return PLAT_META.map(function (m) {
+      return '<button type="button" class="' + (m.key === PLAT_CUR ? 'on' : '') +
+        '" onclick="platPick(\'' + m.key + '\')">' + esc(m.name) + '</button>';
+    }).join('');
+  }
+  function renderPlatTabs() {
+    if ($('platTabs')) $('platTabs').innerHTML = platTabsHtml();
+  }
+  function openPlatformLogin(key) {
+    var m = platformMeta(key);
+    PLAT_CUR = key;
+    if ($('platIcon')) {
+      $('platIcon').textContent = m.short;
+      $('platIcon').style.background = 'linear-gradient(135deg,' + m.color + ',' + m.color + 'CC)';
+    }
+    if ($('platTitle')) $('platTitle').textContent = '登录' + m.name;
+    renderPlatTabs();
+    if ($('platUser')) $('platUser').value = '';
+    if ($('platPass')) $('platPass').value = '';
+    platMsg('');
+    var p = ((PLAT && PLAT.platforms) || []).filter(function (x) { return x.key === key; })[0] || {};
+    if (p.job && p.job.state === 'running') {
+      platMsg(p.job.message || '正在登录…');
+      startPlatformJobPoll(key);
+    } else if (p.job && p.job.state === 'fail' && p.job.message) {
+      platMsg(p.job.message, 'err');
+    }
+    if ($('platSubmit')) $('platSubmit').disabled = !!(p.job && p.job.state === 'running');
+    $('platModal').className = 'modal-mask show';
+    setTimeout(function () { if ($('platUser')) $('platUser').focus(); }, 80);
+  }
+  function closePlatformLogin() {
+    if ($('platUser')) $('platUser').value = '';
+    if ($('platPass')) $('platPass').value = '';
+    PLAT_CUR = '';
+    stopPlatformJobPoll();
+    $('platModal').className = 'modal-mask';
+  }
+  function platPick(key) {
+    if (!key) return;
+    var p = ((PLAT && PLAT.platforms) || []).filter(function (x) { return x.key === key; })[0] || {};
+    if (p.job && p.job.state === 'running') { toast('该平台正在登录，请稍候'); return; }
+    openPlatformLogin(key);
+  }
+  function stopPlatformJobPoll() {
+    if (PLAT_JOB_TIMER) { clearInterval(PLAT_JOB_TIMER); PLAT_JOB_TIMER = null; }
+  }
+  function startPlatformJobPoll(key) {
+    stopPlatformJobPoll();
+    PLAT_JOB_TIMER = setInterval(function () {
+      if (PLAT_CUR !== key) { stopPlatformJobPoll(); return; }
+      api('/api/platforms/status').then(function (r) {
+        if (!ok(r)) return;
+        var p = ((r.data || {}).platforms || []).filter(function (x) { return x.key === key; })[0] || {};
+        if (!p.job) return;
+        if (p.job.state === 'running') {
+          platMsg(p.job.message || '正在登录…');
+          if ($('platSubmit')) $('platSubmit').disabled = true;
+        } else if (p.job.state === 'ok') {
+          platMsg(p.job.message || '登录成功', 'ok');
+          stopPlatformJobPoll();
+          loadPlatforms(true);
+          toast(platformMeta(key).name + '登录成功');
+          setTimeout(closePlatformLogin, 900);
+        } else if (p.job.state === 'fail') {
+          platMsg(p.job.message || '登录未完成', 'err');
+          if ($('platSubmit')) $('platSubmit').disabled = false;
+          stopPlatformJobPoll();
+          loadPlatforms(true);
+        }
+      }).catch(function () {});
+    }, 1200);
+  }
+  function submitPlatformLogin() {
+    if (!PLAT_CUR) return;
+    var user = ($('platUser') && $('platUser').value || '').trim();
+    var pass = ($('platPass') && $('platPass').value || '');
+    if (!user || !pass) { platMsg('请填写账号和密码', 'err'); return; }
+    if ($('platPass')) $('platPass').value = '';
+    if ($('platSubmit')) $('platSubmit').disabled = true;
+    platMsg('正在后台登录，请稍候…');
+    api('/api/platforms/login_password', 'POST', { platform: PLAT_CUR, username: user, password: pass }).then(function (r) {
+      var d = (r && r.data) || {};
+      if (!ok(r)) {
+        platMsg(d.message || '登录没有启动', 'err');
+        if ($('platSubmit')) $('platSubmit').disabled = false;
+        return;
+      }
+      platMsg(d.message || '正在后台登录…');
+      startPlatformJobPoll(PLAT_CUR);
+    }).catch(function () {
+      platMsg('登录请求失败，请重试', 'err');
+      if ($('platSubmit')) $('platSubmit').disabled = false;
+    });
+  }
   window.loadPlatforms = loadPlatforms;
-  window.platformLogin = platformLogin;
   window.platformLogout = platformLogout;
   window.platformClear = platformClear;
+  window.openPlatformLogin = openPlatformLogin;
+  window.closePlatformLogin = closePlatformLogin;
+  window.platPick = platPick;
+  window.submitPlatformLogin = submitPlatformLogin;
   window.startPlatformPoll = startPlatformPoll;
   window.stopPlatformPoll = stopPlatformPoll;
 
@@ -1537,7 +1645,8 @@
   window.viewArticle = viewArticle;
   function openArticlePlatformLogin() {
     if (!ART_PLATFORM) return;
-    platformLogin(ART_PLATFORM, '登录完成后关闭登录窗口，再关掉正文弹窗并重新点标题读取');
+    openPlatformLogin(ART_PLATFORM);
+    toast('登录完成后关闭正文弹窗，再重新点标题读取');
   }
   window.openArticlePlatformLogin = openArticlePlatformLogin;
   function closeArticle() { $('artModal').className = 'modal-mask'; }
