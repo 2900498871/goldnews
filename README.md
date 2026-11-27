@@ -4,6 +4,14 @@
 > v1 覆盖里程碑 **M1–M3 + 部分 M4**：核心链路全部跑通，7 屏界面（含 FR-16 时段新闻研判）。
 > **本版只保留 Windows 桌面端**：手机端（Android APK）与 mobile 预览实例已移除，唯一可执行产物是 `dist/日常小助手.exe`。
 
+**2026-11-28 第十一轮（平台登录 / 退出 / 热搜正文）**
+
+- **五个平台登录**：设置页新增「平台登录」卡片，支持微博 / 百度 / 抖音 / B站 / 知乎。登录窗口是程序内置的 WebView2 小窗，扫码或账号登录都行；程序只在 `data/platform_login.json` 记“是否已登录、上次登录/退出时间、Cookie 名称”，**不保存账号密码，也不明文保存 Cookie 值**。
+- **登录后读热搜正文**：热搜条目点标题时，后端先用同一个 WebView2 用户目录加载页面（页面里已带登录 Cookie），再按平台选择器抽取正文：微博取热门微博正文，知乎取问答正文，B站取视频标题/简介，抖音取视频文案/简介，百度取搜索结果摘要。正文落到 `article_cache` 与当天 `YYYY-MM-DD.正文.html`，仍可「打开本地正文文件」。
+- **需要登录会明确提示**：未登录点平台热搜时，正文弹窗显示“需要先登录X，登录后再点一次标题即可读取”，并提供「登录X后查看」按钮；登录窗口关闭后，再点一次标题即可重新抓取。旧版本把这类链接标成“抓不到正文”的缓存会自动重试，不再卡住。
+- **退出账号是真退出**：设置页每个已登录平台都有「退出账号」，打开该平台官方退出页；微博/百度/B站会直接清登录 Cookie，抖音/知乎需在页面右上角头像菜单点退出，检测到登录 Cookie 消失后自动关闭窗口并把本机状态改为未登录。另有「清除记录」只清本机状态，不修改平台账号。
+- **退出程序收尾**：主程序退出时会销毁所有还开着的平台登录/退出窗口，避免残留 WebView2 子窗口。
+
 **2026-11-27 第十轮（15 项：可靠性 / 任务中心 / 备份合并 / 日志与窗口）**
 
 - **单实例修正**：GUI 实例与 `--no-window` 后台实例改用两个互斥量（`Local\GoldDesk-<端口>` / `-headless`）。后台先跑时双击 GUI 不再被互斥量挡住，而是复用已有 HTTP 服务只开窗口；后台重复启动直接退出，GUI 重复启动会唤回已运行（含托盘隐藏）的窗口后退出，避免两个进程抢数据库。
@@ -164,6 +172,7 @@ v2/
 │   ├── notifier.py              SMTP 测试连接/测试发信/重试/去重/失败留痕
 │   ├── scheduler.py             自定义时点、静默、限流、事件告警、配置热重载、每日文档/汇总时点
 │   ├── daily.py                 每日内容（新闻 + 热搜 / 资讯 / 军事）采集、AI 归纳、三份文档、合并邮件与周期汇总
+│   ├── platforms.py             五平台登录/退出窗口、Cookie 登录态检测、WebView2 渲染抓正文
 │   ├── autostart.py             开机自启动（当前用户注册表 Run 项读写）
 │   ├── goldhist.py              国内 / 国际金价历史（今日分时与 5 年日 K）
 │   ├── pipeline.py              定时/手动同源编排 + 全链路降级
@@ -302,7 +311,7 @@ dist\日常小助手.exe --stop              :: 让已运行的实例干净退�
 `POST /api/fetch`、`POST /api/schedule`、`POST /api/master`、`POST /api/test/{smtp,deepseek,mail}`、
 `GET /api/selfcheck`、`GET /api/report?id=`、`POST /api/{holdings,trade,backtest}`、
 `GET /api/history/runs`、`POST /api/history/analyze`（FR-16）、
-`GET /api/daily?kind=news|brief[&path=]`（每日文档状态 / 读文档）、`GET /api/daily/article?key=&url=&title=`（读某条本机正文，缺了现抓）、`POST /api/daily/{run,digest,open}`、`POST /api/daily/article/open {kind,day}`（打开当天正文 HTML）、`POST /api/autostart {enabled}`、
+`GET /api/daily?kind=news|brief[&path=]`（每日文档状态 / 读文档）、`GET /api/daily/article?key=&url=&title=`（读某条本机正文，缺了现抓）、`GET /api/platforms/status`（五平台登录状态）、`POST /api/platforms/{login,logout,clear} {platform}`（打开登录/退出窗口 / 只清本机状态，仅本机回环地址可调）、`POST /api/daily/{run,digest,open}`、`POST /api/daily/article/open {kind,day}`（打开当天正文 HTML）、`POST /api/autostart {enabled}`、
 `POST /api/window`（桌面无边框窗口控制：`info` 返回 `host: webview|edge`、`maximize`、`minimize`、`close`）、`GET /api/gold_history?symbol=domestic|xau&period=1d|1m|3m|6m|1y|5y`、`POST /api/shutdown`（本机退出）。
 
 ---

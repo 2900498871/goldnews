@@ -285,6 +285,16 @@ td.src{font-size:10.5px;color:var(--ink3);line-height:1.6}
 .srcrow:last-child{border-bottom:0}
 .srcrow .sid{flex:0 0 96px;color:var(--ink2);font-weight:600}
 .srcrow .sv{flex:1;color:var(--ink3)}
+.plist{display:flex;flex-direction:column;gap:8px}
+.prow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+.prow .pname{font-size:12.5px;font-weight:600;color:var(--ink);min-width:52px}
+.prow .pstate{font-size:11px;color:var(--ink2);line-height:1.6}
+.prow .pstate b{font-weight:600}
+.prow .pstate.on b{color:#0E8A5F}
+.prow .pstate.off b{color:var(--ink3)}
+.prow .pact{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.prow .pact .btn{padding:4px 9px;font-size:11px}
+@media (max-width:720px){.prow{align-items:flex-start;flex-direction:column}.prow .pact{width:100%}}
 .mg-preview-wrap{position:relative}
 #mgPreview{transition:opacity .12s ease}
 .mg-preview-wrap.loading{min-height:132px}

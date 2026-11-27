@@ -820,10 +820,21 @@ def extract_article(html_text: str) -> str:
     return _paras(body)
 
 
-def fetch_article(url: str, timeout: float = ARTICLE_TIMEOUT) -> dict:
-    """抓一篇正文，返回 {status: ok|skip|fail, content, chars, reason}。"""
+def fetch_article(url: str, timeout: float = ARTICLE_TIMEOUT, data_dir: str = "") -> dict:
+    """抓一篇正文，返回 {status: ok|skip|fail|need_login, content, chars, reason}。"""
     if not url:
         return {"status": "skip", "content": "", "chars": 0, "reason": "这条没有原文链接"}
+    try:
+        from .platforms import platform_for_url, fetch_rendered, PLATFORMS
+        pid = platform_for_url(url)
+        if pid:
+            if not data_dir:
+                return {"status": "need_login", "content": "", "chars": 0, "platform": pid,
+                        "reason": "需要登录%s后才能读取" % PLATFORMS[pid]["name"]}
+            return fetch_rendered(url, pid, data_dir)
+    except Exception as e:
+        return {"status": "fail", "content": "", "chars": 0,
+                "reason": "登录态正文读取失败：%s: %s" % (type(e).__name__, str(e)[:80])}
     if _art_unsupported(url):
         return {"status": "skip", "content": "", "chars": 0,
                 "reason": "该来源给的是搜索页或需登录，抓不到正文"}
@@ -1303,10 +1314,19 @@ class DailyService:
 
     def article_detail(self, key: str, url: str = "", title: str = "") -> dict:
         """读一条本机正文；没存过或上次失败时按需现抓一次并落库。"""
+        data_dir = os.path.dirname(os.path.abspath(self.db.path))
         hit = self.db.article_get(key) if key else None
-        if (not hit or hit.get("status") not in ("ok", "skip")) and url:
+        hit_url = (hit or {}).get("url") or url
+        try:
+            from .platforms import platform_for_url
+            plat_hit = platform_for_url(hit_url)
+        except Exception:
+            plat_hit = ""
+        # 旧版本把五个平台的热搜页统一标成 skip；升级后要允许这些条目重新走登录态抓取
+        retry_skip = bool(hit and plat_hit and hit.get("status") == "skip")
+        if (not hit or hit.get("status") not in ("ok", "skip") or retry_skip) and url:
             try:
-                res = fetch_article(url)
+                res = fetch_article(url, data_dir=data_dir)
             except Exception as e:  # 现抓出错也不能把已存好的正文覆盖掉
                 res = {"status": "fail", "content": "", "chars": 0, "reason": str(e)[:80]}
             self.db.article_save({"key": key, "url": url, "title": title,
@@ -1316,13 +1336,27 @@ class DailyService:
         if not hit:
             return {"ok": False, "message": "这条还没有保存正文"}
         good = hit.get("status") == "ok" and bool(hit.get("content"))
+        need_login = hit.get("status") == "need_login"
+        try:
+            from .platforms import platform_for_url, PLATFORMS
+            pid = platform_for_url(hit.get("url") or url)
+            platform = PLATFORMS.get(pid) if pid else None
+        except Exception:
+            pid, platform = "", None
+        if need_login and platform:
+            message = "需要先登录%s，登录后再点一次标题即可读取" % platform["name"]
+        elif need_login:
+            message = "该来源需要登录后才能读取正文"
+        else:
+            message = "" if good else ("该来源给的是搜索页或需登录，抓不到正文，可点「打开原文」" if
+                                       hit.get("status") == "skip" else
+                                       "这篇没抓到正文（页面可能是视频或需要跳转），可点「打开原文」")
         return {"ok": True, "key": key, "title": hit.get("title") or title,
                 "url": hit.get("url") or url, "status": hit.get("status") or "fail",
                 "chars": int(hit.get("chars") or 0), "content": hit.get("content") or "",
-                "fetched_at": hit.get("fetched_at"),
-                "message": "" if good else ("该来源给的是搜索页或需登录，抓不到正文，可点「打开原文」" if
-                                            hit.get("status") == "skip" else
-                                            "这篇没抓到正文（页面可能是视频或需要跳转），可点「打开原文」")}
+                "fetched_at": hit.get("fetched_at"), "platform": pid,
+                "platform_name": (platform or {}).get("name") or "",
+                "message": message}
 
     # ---------- 每日文档 ----------
     def run_day(self, kind: str, trigger: str = "manual", force: bool = False,

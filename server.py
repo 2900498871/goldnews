@@ -214,6 +214,9 @@ def make_handler(inst: Instance):
                     return _json(self, inst.daily.article_detail(
                         (q.get("key") or [""])[0], (q.get("url") or [""])[0],
                         (q.get("title") or [""])[0]))
+                if p == "/api/platforms/status":
+                    from engine.platforms import status as platform_status
+                    return _json(self, platform_status(inst.data_dir))
                 if p == "/api/selfcheck":
                     return _json(self, selfcheck(inst.cfg, inst.db, inst.pipeline))
                 if p == "/api/report":
@@ -236,14 +239,28 @@ def make_handler(inst: Instance):
             if p.startswith("/api/") and not self._token_ok(q=urllib.parse.parse_qs(u.query), body=body):
                 return self._deny_token()
             try:
-                # 仅允许本机调用：给无控制台的 exe 提供干净退出入口
-                if p in ("/api/shutdown", "/api/window"):
+                # 仅允许本机调用：给无控制台的 exe 提供干净退出入口；平台登录会弹窗
+                if p in ("/api/shutdown", "/api/window") or p.startswith("/api/platforms/"):
                     if self.client_address[0] not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
                         return _json(self, {"ok": False, "message": "仅允许本机操作"}, 403)
                     origin = self.headers.get("Origin") or ""
                     if origin and not (origin.startswith("http://127.0.0.1:") or
                                        origin.startswith("http://localhost:")):
                         return _json(self, {"ok": False, "message": "来源不被允许"}, 403)
+                if p.startswith("/api/platforms/"):
+                    from engine.platforms import start_login, start_logout, clear_local
+                    platform = str(body.get("platform") or "").strip()
+                    if not platform:
+                        return _json(self, {"ok": False, "message": "缺少平台参数"}, 400)
+                    if p == "/api/platforms/login":
+                        r = start_login(inst.data_dir, platform)
+                    elif p == "/api/platforms/logout":
+                        r = start_logout(inst.data_dir, platform)
+                    elif p == "/api/platforms/clear":
+                        r = clear_local(inst.data_dir, platform)
+                    else:
+                        return _json(self, {"ok": False, "message": "未知平台操作"}, 404)
+                    return _json(self, r)
                 if p == "/api/window":
                     if os.name != "nt":
                         return _json(self, {"ok": False, "message": "仅 Windows 桌面端支持窗口控制"})
@@ -259,6 +276,11 @@ def make_handler(inst: Instance):
                                               float(body.get("cap") or 0),
                                               float(body.get("dpr") or 0))
                         if act == "quit" and r.get("ok"):
+                            try:
+                                from engine.platforms import close_all
+                                close_all()
+                            except Exception:
+                                pass
                             threading.Timer(0.8, self.server.shutdown).start()
                             inst.log.info("收到退出指令，窗口与后台服务同步停止")
                     except Exception as e:

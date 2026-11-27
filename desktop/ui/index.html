@@ -433,6 +433,11 @@
           <div class="hint mt">汇总周期可多选：每周 = 上一个自然周（周一至周日），周一到期；每月 = 上一个自然月；电脑当时关机，下次开机到点会自动补做。汇总时间建议晚于生成时间，这样当天文档也会计入汇总。发送邮件需先在上方启用 SMTP。</div>
         </div>
 
+        <div class="card mt"><div class="ch"><h3>平台登录</h3><span class="sub">登录后才能读取微博 / 百度 / 抖音 / B站 / 知乎热搜正文</span></div>
+          <div id="platformList" class="plist"><div class="empty">正在读取登录状态…</div></div>
+          <div class="hint mt">登录窗口是程序内置浏览器，账号密码不经过程序保存；退出账号会尝试退出平台并清除本机登录状态。</div>
+        </div>
+
         <div class="card mt"><div class="ch"><h3>存储与清理</h3><span class="sub">日志自动轮转；正文缓存按天清理，Markdown 文档永久保留</span></div>
           <div class="form gridform">
             <label>正文 HTML 保留天数</label><input id="f_keep_body_days" type="number" value="365" min="0" max="3650">
@@ -500,6 +505,7 @@
     <div class="btnrow" style="justify-content:space-between">
       <span class="hint" id="artMeta"></span>
       <span>
+        <button class="btn sm" id="artLogin" style="display:none" onclick="openArticlePlatformLogin()">去登录</button>
         <a class="btn sm" id="artOpen" target="_blank" rel="noopener" style="display:none">打开原文</a>
         <button class="btn sm" onclick="openArticleFile()">打开本地正文文件</button>
         <button class="btn sm" onclick="closeArticle()">关闭</button>
