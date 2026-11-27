@@ -96,6 +96,14 @@ def main():
 
     url = "http://%s:%d/" % ("127.0.0.1" if a.host in ("0.0.0.0", "::") else a.host, a.port)
     profile = os.path.join(data_dir, "browser-profile")
+    if not (a.selfcheck or a.fetch):
+        try:
+            from engine.single import ensure_single
+            if not ensure_single(a.port):
+                print("检测到本端实例已在运行，已激活已有窗口。", flush=True)
+                return
+        except Exception:
+            pass
     if port_busy("127.0.0.1", a.port) and not (a.selfcheck or a.fetch):
         print("检测到本端实例已在运行，直接打开窗口：%s" % url)
         if not a.no_window:
@@ -105,6 +113,13 @@ def main():
 
     inst = Instance(base, a.port, a.host, dir_name="desktop",
                     data_dir=data_dir, ui_dir=ui_dir)
+    try:
+        from engine.housekeeping import run_housekeeping
+        cleaned = run_housekeeping(inst)
+        if any(cleaned.values()):
+            print("本端清理：%s" % cleaned, flush=True)
+    except Exception as e:
+        print("本端清理跳过：%s: %s" % (type(e).__name__, e), flush=True)
     if a.selfcheck:
         print(json.dumps(selfcheck(inst.cfg, inst.db, inst.pipeline),
                          ensure_ascii=False, indent=2, default=str))
@@ -132,6 +147,11 @@ def main():
             if getattr(__import__("server"), "HTTPD", None) is not None:
                 break
             time.sleep(0.1)
+        try:
+            from launcher import install_tray
+            install_tray(icon_path)
+        except Exception:
+            pass
         open_desktop_window(url, "黄金积存金助手 v1.0", 1440, 900, icon_path=icon_path,
                             data_dir=data_dir, profile_dir=profile)
         print("应用窗口已关闭，后台服务同步停止。", flush=True)

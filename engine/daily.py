@@ -683,10 +683,19 @@ def _weekday(day: str) -> str:
 
 def _period_label(per: str, start: date, end: date) -> str:
     if per == "1m":
+        last = monthrange(start.year, start.month)[1]
+        if start.day > 1 or end.day < last:
+            return "本月至今（%d月%d日–%d月%d日）" % (start.month, start.day, end.month, end.day)
         return "%d 年 %d 月月报" % (start.year, start.month)
     if per == "1w":
+        if (end - start).days + 1 < 7:
+            return "本周至今（%d月%d日–%d月%d日）" % (start.month, start.day, end.month, end.day)
         return "%d 年 %d 月 %d 日至 %d 月 %d 日周报" % (
             start.year, start.month, start.day, end.month, end.day)
+    if per == "6m":
+        if start.month not in (1, 7) or start.day != 1:
+            return "%s 至 %s 阶段汇总" % (start.isoformat(), end.isoformat())
+        return "%d 年%s半年报" % (start.year, "上" if start.month == 1 else "下")
     if per == "6m":
         return "%d 年%s半年报" % (start.year, "上" if start.month == 1 else "下")
     if per == "1y":
@@ -1148,6 +1157,17 @@ class DailyService:
         # brief 的素材来自本端新闻采集：run_day('brief') 前先跑一次 kind=news 的采集
         self.collect_brief = collect_brief
         self.lock = threading.Lock()
+        self._progress_lock = threading.Lock()
+        self._progress = {"running": False, "mode": "", "step": 0, "total": 0,
+                          "text": "", "started_at": "", "finished_at": "", "error": ""}
+
+    def progress_state(self) -> dict:
+        with self._progress_lock:
+            return dict(self._progress)
+
+    def _set_progress(self, **kw):
+        with self._progress_lock:
+            self._progress.update(kw)
 
     def _mail_name(self) -> str:
         """邮件主题前缀取「发件人显示名」，与设置页保持一致。"""
@@ -1428,22 +1448,39 @@ class DailyService:
         """三份日报依次生成，再合成一封「每日综合」邮件（设置页合并后的唯一入口）。"""
         plan = self.cfg.get().get("daily_all") or {}
         day = now_bj().strftime("%Y-%m-%d")
+        started_at = iso_bj()
+        self._set_progress(running=True, mode="day", step=0, total=4,
+                           text="准备采集", started_at=started_at, finished_at="", error="")
         results = {}
-        for kind in ("news", "brief", "mil"):
-            results[kind] = self.run_day(kind, trigger=trigger, force=force, send_mail=False)
-        if send_mail is None:
-            send_mail = bool(plan.get("send_mail"))
-        combined = None
-        delivery = None
-        if send_mail:
-            combined = self.send_combined_day(day, force=force)
+        try:
+            for idx, kind in enumerate(("news", "brief", "mil"), 1):
+                name = KINDS[kind]["name"]
+                self._set_progress(step=idx - 1, text="%s 采集中（%d/3）" % (name, idx))
+                results[kind] = self.run_day(kind, trigger=trigger, force=force, send_mail=False)
+                self._set_progress(step=idx, text="%s 已完成（%d/3）" % (name, idx))
+            if send_mail is None:
+                send_mail = bool(plan.get("send_mail"))
+            self._set_progress(step=3, text="AI 合成每日综合" + ("并发送邮件" if send_mail else ""))
+            # 无论是否发信，都生成一份「每日综合」本地文档；发信单独由 send_mail 控制
+            combined = self.send_combined_day(day, force=force, send_mail=bool(send_mail))
             delivery = combined.get("delivery")
-        ok = any(r.get("ok") for r in results.values())
-        self.db.event("info" if ok else "error", "每日综合：三份文档 %s%s" % (
-            "已生成" if ok else "生成失败",
-            "，合并邮件已发送" if delivery and delivery.get("ok") else
-            ("，合并邮件发送失败：" + str(delivery.get("message", ""))[:100] if delivery else "")))
-        return {"ok": ok, "day": day, "results": results, "combined": combined, "delivery": delivery}
+            ok = all(bool(r.get("ok")) for r in results.values())
+            if delivery and delivery.get("ok"):
+                tail = "，合并邮件已发送"
+            elif delivery:
+                tail = "，合并邮件发送失败：" + str(delivery.get("message", ""))[:100]
+            elif combined.get("ok"):
+                tail = "，合并文档已生成（未发信）"
+            else:
+                tail = ""
+            self.db.event("info" if ok else "error",
+                          "每日综合：三份文档 %s%s" % ("已生成" if ok else "生成失败", tail))
+            self._set_progress(running=False, step=4, text="已完成", finished_at=iso_bj())
+            return {"ok": ok, "day": day, "results": results, "combined": combined, "delivery": delivery}
+        except Exception as e:
+            self._set_progress(running=False, error="%s: %s" % (type(e).__name__, str(e)[:200]),
+                               finished_at=iso_bj(), text="失败")
+            raise
 
     def due_periods_all(self, plan: dict, today: date | None = None) -> list[tuple[str, tuple]]:
         """统一汇总周期：任意一个模块在该周期到期，就整封汇总一起做。"""
@@ -1459,8 +1496,9 @@ class DailyService:
                 out.append((per, rng))
         return out
 
-    def send_combined_day(self, day: str | None = None, force: bool = False) -> dict:
-        """把当天三份日报的 AI 总结交给 AI 合成一封邮件，并留一份本地 Markdown。"""
+    def send_combined_day(self, day: str | None = None, force: bool = False,
+                          send_mail: bool = True) -> dict:
+        """把当天三份日报的 AI 总结交给 AI 合成一份「每日综合」Markdown，按需发信。"""
         day = day or now_bj().strftime("%Y-%m-%d")
         pieces, missing = [], []
         for kind in ("news", "brief", "mil"):
@@ -1499,62 +1537,133 @@ class DailyService:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         self._write(path, md)
         subject = "【%s】每日综合 · %s（%s）" % (self._mail_name(), day, _weekday(day))
-        delivery = self._send_combined(subject, md, "daily_all")
-        self.db.event("info", "每日综合邮件：%s（AI %s）" % (
-            subject[:60], "完成" if ai.get("available") else "未生成"))
+        delivery = self._send_combined(subject, md, "daily_all") if send_mail else None
+        self.db.event("info", "每日综合%s：%s（AI %s）" % (
+            "邮件" if send_mail else "文档", subject[:60],
+            "完成" if ai.get("available") else "未生成"))
         return {"ok": True, "path": path, "markdown": md,
                 "ai": {"available": bool(ai.get("available")), "reason": ai.get("reason") or ""},
                 "delivery": delivery}
 
     def run_all_digest(self, trigger: str = "manual", force: bool = False,
                        period: str | None = None, send_mail: bool | None = None) -> dict:
-        """统一周期汇总：三个模块各出一份汇总文档，再合成一封汇总邮件。"""
+        """统一周期汇总：三个模块按同一区间各出一份汇总文档，再合成一封汇总邮件。"""
         plan = self.cfg.get().get("daily_all") or {}
         per = period or (digest_periods(plan) or [None])[0]
         if not per:
             return {"ok": False, "not_due": True, "message": "未勾选任何汇总周期，请先到设置页选择"}
-        results = {}
+        today = now_bj().date()
+        # 统一区间：取三个模块各自到期区间的并集，避免同一次汇总里各模块起止不一致
+        ranges = []
         for kind in KINDS:
-            results[kind] = self.run_digest(kind, trigger=trigger, force=force,
-                                            send_mail=False, period=per)
-        good = [r for r in results.values() if r.get("ok") and (r.get("markdown") or "").strip()]
-        if not good:
-            reasons = [str(r.get("message") or "") for r in results.values() if r.get("message")]
+            r = self.due_range(kind, plan, today, per)
+            if r is None and force:
+                r = self.force_range(kind, plan, today, per)
+            if r:
+                ranges.append(r)
+        if not ranges:
             return {"ok": False, "not_due": True, "period": per,
-                    "message": "；".join(reasons) or "区间内没有可汇总的每日文档"}
-        start, end = good[0]["start"], good[0]["end"]
-        label = _period_label(per, date.fromisoformat(start), date.fromisoformat(end))
-        pieces = ["【%s】\n%s" % (KINDS[k]["name"], (results[k].get("markdown") or "").strip())
-                  for k in KINDS if results[k].get("ok") and (results[k].get("markdown") or "").strip()]
-        user = "区间：%s\n\n%s" % (label, "\n\n".join(pieces))
-        ai = self._summarize_or_none(COMBINED_DIGEST_SYSTEM, user, 2400, force)
-        title = "# 每日综合汇总 · %s" % label
-        if ai.get("available"):
-            body = _strip_title(ai.get("text") or "")
-        else:
-            body = ("## 阶段主线\n- 合并综述未生成（%s）；以下为三个板块的汇总摘录\n\n%s" %
-                    (ai.get("reason") or "未知原因", "\n\n".join(pieces)))
-        md = title + "\n\n" + body.strip() + "\n"
-        path = os.path.join(self.doc_root(), "每日综合汇总", "%s至%s" % (start, end), per + ".md")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        self._write(path, md)
-        if send_mail is None:
-            send_mail = bool(plan.get("digest_send_mail", True))
-        delivery = self._send_combined(
-            "【%s】每日综合汇总 · %s（AI 汇总）" % (self._mail_name(), label), md, "digest_all") if send_mail else None
-        self.db.event("info", "每日综合汇总：%s（%d 个模块%s）" % (
-            label, len(good), "，邮件已发送" if delivery and delivery.get("ok") else ""))
-        return {"ok": True, "period": per, "start": start, "end": end, "label": label,
-                "results": results, "path": path, "markdown": md,
-                "ai": {"available": bool(ai.get("available")), "reason": ai.get("reason") or ""},
-                "delivery": delivery}
+                    "message": "所选周期都已汇总过，尚未到下一个周期；点「立即汇总」可强制重新生成"}
+        start = min(x[0] for x in ranges)
+        end = max(x[1] for x in ranges)
+        self._set_progress(running=True, mode="digest", step=0, total=4,
+                           text="%s 汇总准备中" % _period_label(per, start, end),
+                           started_at=iso_bj(), finished_at="", error="")
+        results = {}
+        try:
+            for idx, kind in enumerate(KINDS, 1):
+                name = KINDS[kind]["name"]
+                self._set_progress(step=idx - 1, text="%s 汇总中（%d/3）" % (name, idx))
+                results[kind] = self.run_digest(kind, trigger=trigger, force=force, send_mail=False,
+                                                period=per, rng=(start, end))
+                self._set_progress(step=idx, text="%s 汇总完成（%d/3）" % (name, idx))
+            good = [r for r in results.values() if r.get("ok") and (r.get("markdown") or "").strip()]
+            if not good:
+                reasons = [str(r.get("message") or "") for r in results.values() if r.get("message")]
+                self._set_progress(running=False, finished_at=iso_bj(), text="无可用文档")
+                return {"ok": False, "not_due": True, "period": per,
+                        "message": "；".join(reasons) or "区间内没有可汇总的每日文档"}
+            missing = [KINDS[k]["name"] for k in KINDS
+                       if not (results[k].get("ok") and (results[k].get("markdown") or "").strip())]
+            label = _period_label(per, start, end)
+            self._set_progress(step=3, text="AI 合成每日综合汇总" + ("并发送邮件" if plan.get("digest_send_mail") else ""))
+            pieces = ["【%s】\n%s" % (KINDS[k]["name"], (results[k].get("markdown") or "").strip())
+                      for k in KINDS if results[k].get("ok") and (results[k].get("markdown") or "").strip()]
+            user = "区间：%s\n\n%s" % (label, "\n\n".join(pieces))
+            if missing:
+                user += "\n\n本期无文档的板块：" + "、".join(missing)
+            ai = self._summarize_or_none(COMBINED_DIGEST_SYSTEM, user, 2400, force)
+            title = "# 每日综合汇总 · %s" % label
+            if ai.get("available"):
+                body = _strip_title(ai.get("text") or "")
+            else:
+                body = ("## 阶段主线\n- 合并综述未生成（%s）；以下为三个板块的汇总摘录\n\n%s" %
+                        (ai.get("reason") or "未知原因", "\n\n".join(pieces)))
+            md = title + "\n\n" + body.strip() + "\n"
+            if missing:
+                md += "\n> 本期无文档的板块：%s\n" % "、".join(missing)
+            path = os.path.join(self.doc_root(), "每日综合汇总", "%s至%s" % (start, end), per + ".md")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            self._write(path, md)
+            if send_mail is None:
+                send_mail = bool(plan.get("digest_send_mail", True))
+            delivery = self._send_combined(
+                "【%s】每日综合汇总 · %s（AI 汇总）" % (self._mail_name(), label), md, "digest_all") if send_mail else None
+            self.db.event("info", "每日综合汇总：%s（%d 个模块%s%s）" % (
+                label, len(good), "，缺：" + "、".join(missing) if missing else "",
+                "，邮件已发送" if delivery and delivery.get("ok") else ""))
+            self._set_progress(running=False, step=4, text="已完成", finished_at=iso_bj())
+            return {"ok": True, "period": per, "start": start.isoformat(), "end": end.isoformat(),
+                    "label": label, "results": results, "path": path, "markdown": md,
+                    "missing": missing,
+                    "ai": {"available": bool(ai.get("available")), "reason": ai.get("reason") or ""},
+                    "delivery": delivery}
+        except Exception as e:
+            self._set_progress(running=False, error="%s: %s" % (type(e).__name__, str(e)[:200]),
+                               finished_at=iso_bj(), text="失败")
+            raise
 
-    def _send_combined(self, subject: str, md: str, report_type: str) -> dict:
-        html = ('<div style="font-family:-apple-system,\'Segoe UI\',\'Microsoft YaHei\',sans-serif;'
+    def _combined_html(self, md: str) -> str:
+        return ('<div style="font-family:-apple-system,\'Segoe UI\',\'Microsoft YaHei\',sans-serif;'
                 'font-size:14px;line-height:1.7;max-width:760px;color:#1F2430">%s'
                 '<hr style="border:none;border-top:1px solid #E3E6EC;margin:20px 0">'
                 '<p style="font-size:12px;color:#5B6472">%s</p></div>') % (
             md_to_html(md), _html.escape(DISCLAIMER_MD.strip("*")))
+
+    def mail_preview(self, mode: str = "day", period: str | None = None) -> dict:
+        """读最近一份「每日综合 / 每日综合汇总」Markdown，返回与真实邮件一致的 HTML。"""
+        cfg = self.cfg.get()
+        if mode == "digest":
+            root = os.path.join(self.doc_root(), "每日综合汇总")
+            target = None
+            for base, _dirs, files in os.walk(root):
+                for fn in files:
+                    if fn == (period or "1m") + ".md":
+                        p = os.path.join(base, fn)
+                        if target is None or os.path.getmtime(p) > os.path.getmtime(target):
+                            target = p
+            prefix = "每日综合汇总"
+        else:
+            root = os.path.join(self.doc_root(), "每日综合")
+            target = None
+            for base, _dirs, files in os.walk(root):
+                for fn in files:
+                    if fn.endswith(".md"):
+                        p = os.path.join(base, fn)
+                        if target is None or os.path.getmtime(p) > os.path.getmtime(target):
+                            target = p
+            prefix = "每日综合"
+        if not target or not os.path.isfile(target):
+            return {"ok": False, "message": "还没有生成过%s文档，先生成一次再来预览" % prefix}
+        with open(target, "r", encoding="utf-8") as f:
+            md = f.read()
+        title = md.strip().splitlines()[0].lstrip("# ").strip() if md.strip() else prefix
+        subject = "【%s】%s" % (self._mail_name(), title)
+        return {"ok": True, "mode": mode, "path": target, "subject": subject,
+                "html": self._combined_html(md), "markdown": md}
+
+    def _send_combined(self, subject: str, md: str, report_type: str) -> dict:
+        html = self._combined_html(md)
         report = {"report_date": now_bj().strftime("%Y-%m-%d"), "report_type": report_type,
                   "subject": subject, "html": html, "text_body": md, "signal_id": None}
         report["id"] = self.db.insert_report(report)
@@ -1757,9 +1866,10 @@ class DailyService:
 
     def run_digest(self, kind: str, trigger: str = "manual", force: bool = False,
                    send_mail: bool | None = None, period: str | None = None,
-                   today: date | None = None) -> dict:
+                   today: date | None = None, rng: tuple | None = None) -> dict:
         """周期汇总。period 指定时只做这一个周期；否则对「已到期的周期」逐个汇总，
-        force 时对全部已勾选周期各做一次。各周期各出各的文档、各记各的汇总记录。"""
+        force 时对全部已勾选周期各做一次。各周期各出各的文档、各记各的汇总记录。
+        rng=(start,end) 时直接使用这个区间（每日综合用它统一三个模块的区间）。"""
         if kind not in KINDS:
             return {"ok": False, "message": "未知类型"}
         with self.lock:
@@ -1772,12 +1882,15 @@ class DailyService:
             if not pers:
                 return {"ok": False, "not_due": True, "message": "未勾选任何汇总周期，请先到设置页选择"}
             plan = []
-            for per in pers:
-                rng = self.due_range(kind, sec, today, per)
-                if rng is None and force:
-                    rng = self.force_range(kind, sec, today, per)
-                if rng:
-                    plan.append((per, rng))
+            if rng is not None:
+                plan = [(pers[0], rng)]
+            else:
+                for per in pers:
+                    rng1 = self.due_range(kind, sec, today, per)
+                    if rng1 is None and force:
+                        rng1 = self.force_range(kind, sec, today, per)
+                    if rng1:
+                        plan.append((per, rng1))
             if not plan:
                 return {"ok": False, "not_due": True,
                         "message": "所选周期都已汇总过，尚未到下一个周期；点「立即汇总」可强制重新生成"}

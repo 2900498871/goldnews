@@ -28,6 +28,8 @@ class Scheduler:
         self.last_cfg_mtime = 0.0
         self.last_alert_at = ""
         self.next_push = ""
+        self._daily_fails = {}        # 时点 key → 已失败次数（只自动重试一次）
+        self._alert_last = {}         # 提醒规则 id → 上次命中时间
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -180,42 +182,55 @@ class Scheduler:
         plan = cfg.get("daily_all") or {}
         if plan.get("enabled"):
             if self._due_today("daily|all|%s" % today, plan.get("time"), now):
-                pending.append(("day_all",))
+                pending.append((("day_all",), "daily|all|%s" % today))
             # 统一汇总：三个模块共用一套周期与时间；任意一个模块到期就整封汇总一起做
             due = {p for p, _ in self.daily.due_periods_all(plan, now.date())}
             for per in digest_periods(plan):
-                if per in due and self._due_today("digest|all|%s|%s" % (per, today), plan.get("digest_time"), now):
-                    pending.append(("digest_all", per))
+                key = "digest|all|%s|%s" % (per, today)
+                if per in due and self._due_today(key, plan.get("digest_time"), now):
+                    pending.append((("digest_all", per), key))
         else:
             # 兼容：老配置里 daily_all 被关掉时，退回三个模块各自调度（不再发合并邮件）
             for kind in ("news", "brief", "mil"):
                 sec = cfg.get(SECTION.get(kind, kind)) or {}
                 if not sec.get("enabled"):
                     continue
-                if self._due_today("daily|%s|%s" % (kind, today), sec.get("time"), now):
-                    pending.append(("day", kind))
+                key = "daily|%s|%s" % (kind, today)
+                if self._due_today(key, sec.get("time"), now):
+                    pending.append((("day", kind), key))
                 for per in digest_periods(sec):
+                    key = "digest|%s|%s|%s" % (kind, per, today)
                     if self.daily.due_range(kind, sec, now.date(), per) and \
-                            self._due_today("digest|%s|%s|%s" % (kind, per, today), sec.get("digest_time"), now):
-                        pending.append(("digest", kind, per))
+                            self._due_today(key, sec.get("digest_time"), now):
+                        pending.append((("digest", kind, per), key))
         if not pending:
             return
         if self.daily_thread and self.daily_thread.is_alive():
-            self.log.info("每日文档任务仍在运行，本轮跳过：%s", pending)
+            self.log.info("每日文档任务仍在运行，本轮跳过：%s", [j for j, _ in pending])
             return
 
         def work():
-            for job in pending:
+            for job, key in pending:
+                self.db.mark_slot_fired(key, "running")
                 try:
                     if job[0] == "day_all":
-                        self.daily.run_all_day(trigger="scheduled")
+                        r = self.daily.run_all_day(trigger="scheduled")
+                        if not r.get("ok"):
+                            raise RuntimeError("有日报生成失败")
+                        self._notify("每日内容已生成", "%d/3 份文档%s" % (
+                            sum(1 for x in (r.get("results") or {}).values() if x.get("ok")),
+                            "，合并邮件已发送" if (r.get("delivery") or {}).get("ok") else ""))
                     elif job[0] == "digest_all":
                         r = self.daily.run_all_digest(trigger="scheduled", period=job[1])
                         if r.get("not_due"):
                             self.db.event("info", "每日综合的%s汇总未到期，本次不生成" % (
                                 DIGEST_PERIOD_CN.get(job[1], job[1])))
+                        elif r.get("ok"):
+                            self._notify("每日综合汇总已生成", r.get("label") or job[1])
                     elif job[0] == "day":
-                        self.daily.run_day(job[1], trigger="scheduled")
+                        r = self.daily.run_day(job[1], trigger="scheduled")
+                        if not r.get("ok"):
+                            raise RuntimeError(str(r.get("message") or "生成失败"))
                     else:
                         _, kind, per = job
                         r = self.daily.run_digest(kind, trigger="scheduled", period=per)
@@ -223,51 +238,85 @@ class Scheduler:
                             self.db.event("info", "%s 的%s汇总未到期，本次不生成" % (
                                 {"news": "每日新闻", "brief": "每日资讯", "mil": "每日军事新闻"}.get(kind, kind),
                                 DIGEST_PERIOD_CN.get(per, per)))
+                    self.db.mark_slot_fired(key, "done")
+                    self._daily_fails.pop(key, None)
                 except Exception as e:
-                    self.db.event("error", "每日文档任务异常（%s）：%s" % ("/".join(str(x) for x in job), str(e)[:160]))
+                    # 第一次失败释放标记，下一轮自动重试；第二次仍失败则本日不再反复跑
+                    if self._daily_fails.get(key, 0) <= 0:
+                        self._daily_fails[key] = 1
+                        self.db.clear_slot_fired(key)
+                        self.db.event("warn", "每日文档任务失败（%s），稍后自动重试一次：%s" % (
+                            "/".join(str(x) for x in job), str(e)[:160]))
+                    else:
+                        self.db.mark_slot_fired(key, "failed")
+                        self.db.event("error", "每日文档任务重试仍失败（%s）：%s" % (
+                            "/".join(str(x) for x in job), str(e)[:160]))
 
         self.daily_thread = threading.Thread(target=work, name="golddesk-daily", daemon=True)
         self.daily_thread.start()
+
+    def _notify(self, title: str, text: str):
+        try:
+            from launcher import notify
+            notify(title, text)
+        except Exception:
+            pass
 
     def _due_today(self, key: str, hhmm, now) -> bool:
         hhmm = str(hhmm or "")
         if not hhmm_valid(hhmm) or self.db.slot_fired(key):
             return False
         t = now.replace(hour=int(hhmm[:2]), minute=int(hhmm[3:]), second=0, microsecond=0)
-        if now < t:
-            return False
-        self.db.mark_slot_fired(key, "firing")
-        return True
+        return now >= t
 
     def _check_alert(self, cfg, run_result: dict):
-        """日内涨跌幅异动：事件级，2 小时内不重复，受静默与单日上限约束。"""
+        """日内异动 + 用户自定义到价/涨跌幅/MA20 规则：同一轮只发一封提醒。"""
         if not run_result or not run_result.get("ok"):
             return
+        prices = run_result.get("snapshot", {}).get("prices", []) or []
+        now = now_bj()
+        hit_msgs = []
         threshold = float(cfg.get("alert", {}).get("intraday_pct", 2.0))
-        hit = None
-        for p in run_result.get("snapshot", {}).get("prices", []):
+        intraday = None
+        for p in prices:
             if p.get("symbol") in ("XAU/USD", "Au99.99") and p.get("change_pct") is not None:
                 if abs(float(p["change_pct"])) >= threshold and p.get("quality_flag") == "ok":
-                    hit = p
+                    intraday = p
                     break
-        if not hit:
+        if intraday:
+            hit_msgs.append("异动：%s 较本端上一快照 %s%%（盘中瞬时波动，非趋势确认）" % (
+                intraday["symbol"], intraday["change_pct"]))
+        al = cfg.get("alerts") or {}
+        if al.get("enabled", True):
+            from .alerts import evaluate
+            cooldown = float(al.get("cooldown_hours", 12) or 0) * 3600
+            for h in evaluate(cfg, self.db, prices):
+                rid = str(h["rule"].get("id") or h["rule"].get("type"))
+                last = self._alert_last.get(rid)
+                if last and cooldown > 0 and (now - last).total_seconds() < cooldown:
+                    continue
+                self._alert_last[rid] = now
+                hit_msgs.append("提醒：%s" % h["text"])
+        if not hit_msgs:
             return
-        now = now_bj()
-        if self._in_quiet(cfg, now.strftime("%H:%M")):
-            return
-        if self._over_daily_limit(cfg):
-            return
-        if self.last_alert_at:
+        # 异动沿用原来的 2 小时总冷却；纯自定义提醒按每条规则自己的冷却
+        if intraday and self.last_alert_at:
             try:
                 prev = datetime.fromisoformat(self.last_alert_at)
                 if (now - prev).total_seconds() < 7200:
                     return
             except ValueError:
                 pass
+        if self._in_quiet(cfg, now.strftime("%H:%M")):
+            return
+        if self._over_daily_limit(cfg):
+            return
         self.last_alert_at = iso_bj()
-        self.db.event("warn", "异动：%s 较本端上一快照 %s%%（盘中瞬时波动，非趋势确认）" %
-                      (hit["symbol"], hit["change_pct"]))
-        try:
-            self.pipeline.run(kind="flash", trigger="scheduled", send_mail=True)
-        except Exception as e:
-            self.log.warning("异动快报失败：%s", str(e)[:160])
+        for m in hit_msgs:
+            self.db.event("warn", m)
+        self._notify("金价提醒", "；".join(hit_msgs))
+        if al.get("send_mail", True):
+            try:
+                self.pipeline.run(kind="flash", trigger="scheduled", send_mail=True)
+            except Exception as e:
+                self.log.warning("提醒快报失败：%s", str(e)[:160])

@@ -158,6 +158,12 @@ def _build_default_config() -> dict:
         "mil": dict(_digest_defaults("19:40"), max_items=60),
         # 每日综合：三个模块共用一套时间与汇总周期，到点依次生成三份文档，再合成一封邮件
         "daily_all": dict(_digest_defaults("20:30")),
+        # 存储与清理：日志轮转固定 10MB×5；正文 HTML 与文章缓存按天数清理，Markdown 文档永久保留
+        "storage": {"keep_body_days": 365, "keep_cache_days": 180},
+        # 到价 / 均线提醒：rules 为规则列表，冷却时间避免同一条反复发信
+        "alerts": {"enabled": True, "cooldown_hours": 12, "send_mail": True, "rules": []},
+        # 首次配置向导是否已完成（完成后不再自动弹出）
+        "setup": {"done": False},
     }
 
 
@@ -315,6 +321,27 @@ def _validate(cfg: dict):
     all_sec = cfg.get("daily_all")
     if all_sec is not None:
         _validate_digest_section("每日综合", all_sec)
+    st = cfg.get("storage") or {}
+    for key, lo, hi in (("keep_body_days", 0, 3650), ("keep_cache_days", 0, 3650)):
+        v = st.get(key, 0)
+        if not isinstance(v, int) or not (lo <= v <= hi):
+            raise ConfigError("存储清理天数 %s 必须为 %d–%d 的整数（0 表示永久保留）" % (key, lo, hi))
+    al = cfg.get("alerts") or {}
+    if not isinstance(al.get("rules", []), list):
+        raise ConfigError("到价提醒规则必须是列表")
+    ch = al.get("cooldown_hours", 12)
+    if not isinstance(ch, (int, float)) or ch < 0:
+        raise ConfigError("提醒冷却小时必须为非负数")
+    for i, r in enumerate(al.get("rules", []) or [], 1):
+        if not isinstance(r, dict):
+            raise ConfigError("第 %d 条提醒规则格式不正确" % i)
+        if r.get("type") not in ("price_above", "price_below", "pct_up", "pct_down",
+                                 "ma20_above", "ma20_below"):
+            raise ConfigError("第 %d 条提醒规则的类型不合法" % i)
+        try:
+            float(r.get("value"))
+        except (TypeError, ValueError):
+            raise ConfigError("第 %d 条提醒规则的数值必须为数字" % i)
 
 
 class ConfigStore:

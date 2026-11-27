@@ -306,8 +306,23 @@ class DB:
         return self.one("SELECT 1 FROM slot_fire WHERE fire_key=?", (key,)) is not None
 
     def mark_slot_fired(self, key: str, status="ok"):
-        self.run("INSERT OR IGNORE INTO slot_fire(fire_key,fired_at,status) VALUES(?,?,?)",
+        """同一时点只应有一条记录；状态可更新（running → done / failed）。"""
+        self.run("INSERT INTO slot_fire(fire_key,fired_at,status) VALUES(?,?,?) "
+                 "ON CONFLICT(fire_key) DO UPDATE SET fired_at=excluded.fired_at,status=excluded.status",
                  (key, iso_bj(), status))
+
+    def clear_slot_fired(self, key: str):
+        """任务失败时释放时点标记，让下一次调度可以重试。"""
+        self.run("DELETE FROM slot_fire WHERE fire_key=?", (key,))
+
+    def clear_stuck_slots(self, minutes: int = 30) -> int:
+        """进程崩溃留下的 running/firing 标记：超过 N 分钟就释放，避免当天漏做。"""
+        cutoff = (now_bj() - timedelta(minutes=max(1, minutes))).isoformat(timespec="seconds")
+        with self.conn() as c:
+            cur = c.execute("DELETE FROM slot_fire WHERE status IN ('running','firing') AND fired_at < ?",
+                            (cutoff,))
+            c.commit()
+            return int(cur.rowcount or 0)
 
     # ---- 每日新闻 / 每日资讯 ----
     def replace_daily_items(self, day: str, src: str, items: list[dict]):
@@ -357,6 +372,23 @@ class DB:
     # ---- 新闻正文本地缓存（key = 链接哈希，同一篇跨天只存一份） ----
     def article_get(self, key: str) -> dict | None:
         return self.one("SELECT * FROM article_cache WHERE key=?", (key,))
+
+    def prune_article_cache(self, cutoff_iso: str) -> int:
+        """清理早于 cutoff 的文章正文缓存，返回删除条数。"""
+        with self.conn() as c:
+            cur = c.execute("DELETE FROM article_cache WHERE fetched_at < ?", (cutoff_iso,))
+            c.commit()
+            return int(cur.rowcount or 0)
+
+    def prune_events(self, keep: int = 3000) -> int:
+        """事件日志只保留最近 N 条。"""
+        row = self.one("SELECT COUNT(*) AS n FROM event_log")
+        n = int((row or {}).get("n") or 0)
+        if n <= keep:
+            return 0
+        self.run("DELETE FROM event_log WHERE id NOT IN "
+                 "(SELECT id FROM event_log ORDER BY id DESC LIMIT ?)", (keep,))
+        return n - keep
 
     def article_many(self, keys: list[str]) -> dict:
         keys = [k for k in (keys or []) if k]

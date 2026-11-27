@@ -409,6 +409,20 @@ def _wv_action(action: str) -> dict:
             rect = [r.left, r.top, r.right, r.bottom]
         return {"ok": True, "host": "webview", "frameless": True, "caption_hidden": True,
                 "hwnd": hwnd or 0, "rect": rect, "maximized": zoomed, "compact": not zoomed}
+    if action == "hide":
+        hwnd = _wv_hwnd()
+        if not hwnd:
+            return {"ok": False, "message": "窗口尚未创建"}
+        ctypes.windll.user32.ShowWindow(hwnd, 0)
+        return {"ok": True}
+    if action == "show":
+        hwnd = _wv_hwnd()
+        if not hwnd:
+            return {"ok": False, "message": "窗口尚未创建"}
+        ctypes.windll.user32.ShowWindow(hwnd, 9)
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+        _wv_heal()
+        return {"ok": True}
     if action == "minimize":
         _WV.minimize()
         return {"ok": True}
@@ -576,6 +590,48 @@ def find_browser() -> str | None:
     return None
 
 
+def focus_app_window() -> bool:
+    """托盘双击/菜单「显示主窗口」：把无边框窗口还原到前台。"""
+    if _WV_HOST == "webview":
+        try:
+            return bool(_wv_action("show").get("ok"))
+        except Exception:
+            return False
+    api = _api()
+    if not api:
+        return False
+    found = api.windows()
+    if not found:
+        return False
+    try:
+        api.u32.ShowWindow(found[0], 9)          # SW_RESTORE
+        api.u32.SetForegroundWindow(found[0])
+        return True
+    except Exception:
+        return False
+
+
+def install_tray(icon_path: str = "") -> bool:
+    """装上托盘图标；退出菜单复用窗口关闭流程。"""
+    if os.name != "nt":
+        return False
+    try:
+        import tray
+        tray.install(focus_app_window, lambda: window_action("quit"), icon_path)
+        return True
+    except Exception:
+        return False
+
+
+def notify(title: str, text: str) -> bool:
+    """托盘气泡通知；托盘没装或失败时静默返回 False。"""
+    try:
+        import tray
+        return tray.notify(title, text)
+    except Exception:
+        return False
+
+
 def window_action(action: str, dx: float = 0, dy: float = 0, cap: float = 0,
                   dpr: float = 0) -> dict:
     """供本地 API 调用：裁剪标题栏 / 拖动 / 最小化 / 最大化 / 退出 / 查询。"""
@@ -629,6 +685,9 @@ def window_action(action: str, dx: float = 0, dy: float = 0, cap: float = 0,
             return {"ok": True}
         if action == "minimize":
             api.minimize(hwnd)
+            return {"ok": True}
+        if action == "hide":
+            api.u32.ShowWindow(hwnd, 0)      # SW_HIDE：收进托盘，任务栏不再占位
             return {"ok": True}
         if action == "maximize":
             return {"ok": True, "maximized": api.toggle_maximize(hwnd)}

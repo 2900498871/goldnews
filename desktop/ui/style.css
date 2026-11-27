@@ -293,3 +293,15 @@ td.src{font-size:10.5px;color:var(--ink3);line-height:1.6}
 
 /* 每日军事新闻的 AI 总结比新闻更长（三节），单独放开高度，避免第三节被裁掉 */
 #dlAi{max-height:820px}
+
+/* 历史文档日历 */
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:10px}
+.calgrid .cd{border:1px solid var(--line);border-radius:7px;min-height:56px;padding:5px 7px;font-size:11px;color:var(--ink3);background:#fff}
+.calgrid .cd.has{cursor:pointer;border-color:#D6E3FF;background:var(--bluebg);color:var(--ink)}
+.calgrid .cd.has:hover{border-color:var(--brand2)}
+.calgrid .cd.today{outline:2px solid #FFD37A}
+.calgrid .cd b{display:block;font-size:12px;color:var(--ink)}
+.calgrid .cd span{display:block;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.calgrid .hd{min-height:auto;border:0;background:transparent;text-align:center;font-size:11px;color:var(--ink3)}
+.alertrow{display:grid;grid-template-columns:118px 110px 1fr 46px 70px;gap:6px;align-items:center;margin-bottom:6px;font-size:12px}
+.alertrow select,.alertrow input{margin:0;padding:5px 7px;font-size:12px}

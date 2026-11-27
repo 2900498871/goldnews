@@ -88,7 +88,9 @@ def get_logger(name: str, log_path: str | None = None, level=logging.INFO):
     logger.addHandler(sh)
     if log_path:
         try:
-            fh = logging.FileHandler(log_path, encoding="utf-8")
+            from logging.handlers import RotatingFileHandler
+            fh = RotatingFileHandler(log_path, maxBytes=10 * 1024 * 1024, backupCount=5,
+                                     encoding="utf-8")
             fh.setFormatter(fmt)
             logger.addHandler(fh)
         except OSError:

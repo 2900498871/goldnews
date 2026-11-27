@@ -37,7 +37,21 @@ def main():
     ap.add_argument("--send-mail", action="store_true")
     a = ap.parse_args()
 
+    # 同一端口只允许一个实例：重复双击时激活已运行窗口，不再抢端口/数据库
+    if not (a.selfcheck or a.fetch):
+        from engine.single import ensure_single
+        if not ensure_single(a.port):
+            print("检测到本程序已在运行，已切换到现有窗口。", flush=True)
+            return
+
     inst = Instance(ROOT, a.port, a.host)
+    try:
+        from engine.housekeeping import run_housekeeping
+        cleaned = run_housekeeping(inst)
+        if any(cleaned.values()):
+            print("本端清理：%s" % cleaned, flush=True)
+    except Exception as e:
+        print("本端清理跳过：%s: %s" % (type(e).__name__, e), flush=True)
     if a.selfcheck:
         print(json.dumps(selfcheck(inst.cfg, inst.db, inst.pipeline), ensure_ascii=False, indent=2))
         inst.scheduler.stop()
@@ -61,12 +75,13 @@ def main():
     # WebView2 窗口必须跑在主线程：后台服务放子线程，窗口关闭后再把服务停掉
     import time
     from server import stop_http
-    from launcher import open_desktop_window
+    from launcher import open_desktop_window, install_tray
     threading.Thread(target=serve, args=(inst,), daemon=True).start()
     for _ in range(50):
         if getattr(__import__("server"), "HTTPD", None) is not None:
             break
         time.sleep(0.1)
+    install_tray(os.path.join(ROOT, "desktop", "GoldDesk.ico"))
     open_desktop_window(url, "黄金积存金助手 v1.0", 1440, 900,
                         icon_path=os.path.join(ROOT, "desktop", "GoldDesk.ico"),
                         data_dir=inst.data_dir,

@@ -1,7 +1,7 @@
 /* GoldDesk v1.0 前端：Windows 桌面端（单端，无手机端） */
 (function () {
   'use strict';
-  var S = null, C = null, reportCache = null, reportMode = 'html';
+  var S = null, C = null, reportCache = null, reportMode = 'html', setupChecked = false;
   var historyPreset = '6m', historyTouched = false;
   var CN = { bullish: '偏多', bearish: '偏空', neutral: '中性', unclear: '信号不明确' };
   var HIDIR = { bullish: '偏多倾向', bearish: '偏空倾向', neutral: '中性', unclear: '信号不明确' };
@@ -684,6 +684,19 @@
       // 每日内容：一套时间与汇总周期（daily_all），三个模块只保留采集范围
       loadDailyAll(C.daily_all || {}, C.daily || {}, C.brief || {}, C.mil || {});
       $('f_doc_dir').value = C.doc_dir || '';
+      var st = C.storage || {};
+      $('f_keep_body_days').value = st.keep_body_days === undefined ? 365 : st.keep_body_days;
+      $('f_keep_cache_days').value = st.keep_cache_days === undefined ? 180 : st.keep_cache_days;
+      var al = C.alerts || {};
+      setSw('f_al_enabled', al.enabled !== false);
+      setSw('f_al_mail', al.send_mail !== false);
+      $('f_al_cooldown').value = al.cooldown_hours === undefined ? 12 : al.cooldown_hours;
+      renderAlerts(al.rules || []);
+      // 首次配置向导：只在第一次打开、且 SMTP 还没配好时自动弹一次
+      if (!setupChecked) {
+        setupChecked = true;
+        if (!(C.setup || {}).done && !(s.enabled && (s.to || []).length)) setTimeout(openSetup, 800);
+      }
     });
   }
   window.loadConfig = loadConfig;
@@ -1120,22 +1133,57 @@
   }
   window.saveDailyAll = saveDailyAll;
 
+  var DA_POLL = null;
+  function renderDaProgress(p) {
+    var box = $('daProgress'); if (!box) return;
+    if (!p || !p.running) { if (!p || !p.text) { box.style.display = 'none'; return; } }
+    box.style.display = 'block';
+    var total = p.total || 4, step = p.step || 0;
+    var pct = total ? Math.round(step * 100 / total) : 0;
+    box.innerHTML = '<b>' + esc(p.text || '进行中') + '</b>' +
+      '<div class="bar" style="height:6px;background:#EEF1F6;border-radius:4px;margin:6px 0;overflow:hidden">' +
+      '<div style="width:' + pct + '%;height:100%;background:linear-gradient(90deg,#3B82F6,#7FB2FF)"></div></div>' +
+      '<span class="hint">' + step + '/' + total + (p.error ? ' · 失败：' + esc(p.error) : '') + '</span>';
+  }
+  function startDaProgress() {
+    if (DA_POLL) return;
+    var tick = function () {
+      api('/api/daily/progress').then(function (r) {
+        var p = (r && r.data) || {};
+        renderDaProgress(p);
+        if (!p.running && DA_POLL) { clearInterval(DA_POLL); DA_POLL = null; }
+      }).catch(function () {});
+    };
+    tick(); DA_POLL = setInterval(tick, 2000);
+  }
+  function stopDaProgress() { if (DA_POLL) { clearInterval(DA_POLL); DA_POLL = null; } setTimeout(function () { renderDaProgress(null); }, 1200); }
+  function notifyDesktop(title, text) {
+    api('/api/window', 'POST', { action: 'notify', title: title, text: text }).catch(function () {});
+  }
   function runDailyAll() {
     var sm = isOn('f_da_mail');
     if (!confirm('将依次采集新闻、资讯、军事三份内容（约 1–3 分钟），' +
-                 (sm ? '完成后 AI 合成一封邮件发出' : '不发邮件') + '。继续？')) return;
+                 (sm ? '完成后 AI 合成一封邮件发出' : '不发邮件，仍会生成本地合并文档') + '。继续？')) return;
     toast('开始生成三份每日内容…');
+    startDaProgress();
     api('/api/daily/run_all', 'POST', { send_mail: sm }).then(function (r) {
       var d = r.data || {};
-      if (!ok(r)) { toast('生成失败：' + (d.message || '未知错误')); return; }
+      stopDaProgress();
+      if (!ok(r)) {
+        toast('生成失败：' + (d.message || '未知错误'));
+        notifyDesktop('每日内容生成失败', d.message || '未知错误');
+        return;
+      }
       var part = ['新闻', '资讯', '军事'].filter(function (k) {
         return (d.results || {})[k] && d.results[k].ok;
       }).length;
       var mail = (d.combined || {}).delivery || d.delivery || {};
-      toast('完成：' + part + '/3 份文档已生成' +
-            (d.combined ? ('；合并邮件' + (mail.ok ? '已发送' : ('失败：' + (mail.message || ''))) ) : ''));
+      var msg = '完成：' + part + '/3 份文档已生成' +
+        (d.combined ? ('；合并邮件' + (mail.ok ? '已发送' : ('未发送：' + (mail.message || '未开启')))) : '');
+      toast(msg);
+      notifyDesktop('每日内容已生成', part + '/3 份文档' + (mail.ok ? '，合并邮件已发送' : ''));
       loadState(); loadDaily(); loadConfig();
-    });
+    }).catch(function (e) { stopDaProgress(); toast('请求失败：' + e); notifyDesktop('每日内容生成失败', String(e)); });
   }
   window.runDailyAll = runDailyAll;
   function toggleAutostart(el) {
@@ -1201,7 +1249,7 @@
     var k = DK;   /* 切页签时旧请求可能后到：只接受当前页签的返回 */
     return api('/api/daily?kind=' + k).then(function (r) {
       if (k !== DK) return;
-      if (ok(r)) { DL = r.data; renderDaily(); }
+      if (ok(r)) { DL = r.data; renderDaily(); loadDailyDocs(); }
       else toast('读取失败：' + ((r.data || {}).message || '未知错误'));
     })
       .catch(function () { $('dlAi').innerHTML = '<div class="empty">加载失败，请点击顶栏「刷新」或切换页签重试</div>'; });
@@ -1421,6 +1469,242 @@
     }).catch(function (e) { toast('请求失败：' + e); });
   }
   window.openDocFolder = openDocFolder;
+
+  /* ---------------- 历史文档：日历 / 搜索 / 导出 / 重生成 ---------------- */
+  var DLD = { docs: [], digests: [], month: '' };
+  function curMonth() {
+    var m = ($('dlMonth') && $('dlMonth').value) || '';
+    if (!m) { var d = new Date(); m = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+    return m;
+  }
+  function loadDailyDocs() {
+    var m = curMonth(), q = ($('dlSearch') && $('dlSearch').value || '').trim();
+    var mi = $('dlMonth'); if (mi && !mi.value) mi.value = m;
+    DLD.month = m;
+    return api('/api/daily/docs?kind=' + DK + '&month=' + encodeURIComponent(m) +
+               '&q=' + encodeURIComponent(q)).then(function (r) {
+      if (!ok(r)) { toast('查询失败：' + ((r.data || {}).message || '未知错误')); return; }
+      DLD.docs = (r.data.docs || []); DLD.digests = (r.data.digests || []);
+      renderDocHistory();
+    }).catch(function (e) { toast('查询失败：' + e); });
+  }
+  window.loadDailyDocs = loadDailyDocs;
+  var DL_SEARCH_T = null;
+  function searchDailyDocs() {
+    if (DL_SEARCH_T) clearTimeout(DL_SEARCH_T);
+    DL_SEARCH_T = setTimeout(loadDailyDocs, 400);
+  }
+  window.searchDailyDocs = searchDailyDocs;
+  function renderDocHistory() {
+    var month = DLD.month || curMonth(), docs = DLD.docs || [];
+    var byDay = {}; docs.forEach(function (x) { byDay[x.day] = x; });
+    var y = parseInt(month.slice(0, 4), 10), mo = parseInt(month.slice(5, 7), 10);
+    var first = new Date(y, mo - 1, 1), days = new Date(y, mo, 0).getDate();
+    var lead = (first.getDay() + 6) % 7;   // 周一为第一列
+    var today = new Date();
+    var todayStr = today.getFullYear() + '-' + ('0' + (today.getMonth() + 1)).slice(-2) + '-' + ('0' + today.getDate()).slice(-2);
+    var cal = ['<div class="cd hd">一</div><div class="cd hd">二</div><div class="cd hd">三</div><div class="cd hd">四</div><div class="cd hd">五</div><div class="cd hd">六</div><div class="cd hd">日</div>'];
+    for (var i = 0; i < lead; i++) cal.push('<div></div>');
+    for (var d = 1; d <= days; d++) {
+      var ds = month + '-' + ('0' + d).slice(-2), x = byDay[ds];
+      cal.push('<div class="cd' + (x ? ' has' : '') + (ds === todayStr ? ' today' : '') + '"' +
+        (x ? ' onclick="viewDocPath(\'' + esc(String(x.path).replace(/\\/g, '\\\\').replace(/'/g, "\\'")) + '\')" title="' + esc(x.path) + '"' : '') + '>' +
+        '<b>' + d + '</b>' + (x ? '<span>' + (x.ai_available ? 'AI 总结' : '已生成') + '</span>' : '') + '</div>');
+    }
+    $('dlCal').innerHTML = cal.join('');
+    var cards = docs.map(function (x) {
+      var xc = {}; try { xc = JSON.parse(x.counts_json || '{}') || {}; } catch (e) {}
+      return '<div class="dc" onclick="viewDocPath(\'' + esc(String(x.path).replace(/\\/g, '\\\\').replace(/'/g, "\\'")) + '\')" title="' + esc(x.path) + '"><b>' + esc(x.day) + '</b><small>' +
+        (x.ai_available ? 'AI 总结' : '无 AI 总结') + ' · ' + (DK === 'news' ? (xc.cctv || 0) + '+' + (xc.hot || 0) + ' 条'
+          : (DK === 'mil' ? (xc.mil_domestic || 0) + '+' + (xc.mil_world || 0) + ' 条' : (xc.brief || 0) + ' 条')) +
+        (xc.content ? ' · 正文 ' + xc.content + ' 篇' : '') + '</small>' +
+        (x.snippet ? '<small style="display:block;white-space:normal;line-height:1.4">' + esc(x.snippet.slice(0, 46)) + '…</small>' : '') + '</div>';
+    }).join('');
+    var dgs = (DLD.digests || []).map(function (g) {
+      return '<div class="dc dg" onclick="viewDocPath(\'' + esc(String(g.path).replace(/\\/g, '\\\\').replace(/'/g, "\\'")) + '\')" title="' + esc(g.path) + '">' +
+        '<b>' + esc(g.label) + '</b><small>' + g.days + ' 天 · ' + esc(String(g.start_date || '').slice(2, 10)) + '</small>' +
+        '<button class="mini" onclick="event.stopPropagation();regenDigest(\'' + esc(g.period) + '\')" style="margin-top:5px">重新生成</button></div>';
+    }).join('');
+    $('dlDocs').innerHTML = '<div class="hint" style="margin-bottom:8px">每日文档 · ' + esc(month) + '（' + docs.length + ' 份）</div>' +
+      (cards ? '<div class="docgrid">' + cards + '</div>' : '<div class="empty">这个月还没有文档</div>') +
+      '<div class="hint" style="margin:14px 0 8px">周期汇总记录（最近 60 条）</div>' +
+      (dgs ? '<div class="docgrid">' + dgs + '</div>' : '<div class="empty">尚无汇总记录</div>');
+  }
+  function exportDailyMonth() {
+    var m = curMonth();
+    api('/api/export/daily', 'POST', { kind: DK, month: m }).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast('导出失败：' + (d.message || '未知错误')); return; }
+      toast('已导出 ' + m + '：' + d.files + ' 个文件（' + Math.round((d.size || 0) / 1024) + ' KB），已打开文件夹');
+      api('/api/export/open', 'POST', { path: d.path });
+    }).catch(function (e) { toast('导出失败：' + e); });
+  }
+  window.exportDailyMonth = exportDailyMonth;
+  function exportTodayDoc(fmt) {
+    var d0 = (DL && DL.docs && DL.docs[0]) || (DLD.docs && DLD.docs[0]);
+    if (!d0) { toast('今天还没有文档，先生成一次'); return; }
+    api('/api/export/doc', 'POST', { path: d0.path, format: fmt }).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast('导出失败：' + (d.message || '未知错误')); return; }
+      toast('已导出 ' + (fmt === 'pdf' ? 'PDF' : 'Word') + '：' + d.path);
+      api('/api/export/open', 'POST', { path: d.path });
+    }).catch(function (e) { toast('导出失败：' + e); });
+  }
+  window.exportTodayDoc = exportTodayDoc;
+  function regenDigest(per) {
+    if (!confirm('重新生成 ' + per + ' 汇总？会调用 AI 并覆盖同区间文档（不发邮件）。')) return;
+    toast('正在重新生成汇总…');
+    api('/api/daily/digest', 'POST', { kind: DK, period: per, force: true, send_mail: false }).then(function (r) {
+      var d = r.data || {};
+      toast(d.ok ? '汇总已重新生成' : ('失败：' + (d.message || '未知错误')));
+      loadDailyDocs(); loadDaily();
+    }).catch(function (e) { toast('请求失败：' + e); });
+  }
+  window.regenDigest = regenDigest;
+
+  /* ---------------- 邮件预览 ---------------- */
+  function previewMail(mode, period) {
+    api('/api/daily/preview', 'POST', { mode: mode || 'day', period: period || null }).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast(d.message || '还没有可预览的合并文档'); return; }
+      $('mailSubject').textContent = d.subject || '合并邮件预览';
+      $('mailPath').textContent = d.path || '';
+      $('mailFrame').srcdoc = '<!doctype html><body style="margin:0;padding:16px;background:#fff">' + (d.html || '') + '</body>';
+      $('mailModal').className = 'modal-mask show';
+    }).catch(function (e) { toast('预览失败：' + e); });
+  }
+  window.previewMail = previewMail;
+  function setMailWidth(w) { $('mailFrame').style.width = w + 'px'; }
+  window.setMailWidth = setMailWidth;
+  function closeMail() { $('mailModal').className = 'modal-mask'; }
+  window.closeMail = closeMail;
+
+  /* ---------------- 导出 / 备份 ---------------- */
+  function exportBackup() {
+    if (!confirm('备份会打包配置、数据库和全部每日文档，可能要几十秒。继续？')) return;
+    toast('正在打包备份…');
+    api('/api/export/backup', 'POST', {}).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast('备份失败：' + (d.message || '未知错误')); return; }
+      toast('备份完成：' + Math.round((d.size || 0) / 1024 / 1024 * 10) / 10 + ' MB，已打开文件夹');
+      api('/api/export/open', 'POST', { path: d.path });
+    }).catch(function (e) { toast('备份失败：' + e); });
+  }
+  window.exportBackup = exportBackup;
+  function exportTrades() {
+    api('/api/export/trades', 'POST', {}).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast('导出失败：' + (d.message || '未知错误')); return; }
+      toast('持仓 CSV 已导出'); api('/api/export/open', 'POST', { path: d.path });
+    }).catch(function (e) { toast('导出失败：' + e); });
+  }
+  window.exportTrades = exportTrades;
+  function hideToTray() {
+    api('/api/window', 'POST', { action: 'hide', cap: 0 }).then(function (r) {
+      if (!ok(r)) { toast('收进托盘失败：' + ((r.data || {}).message || '未知错误')); }
+    }).catch(function () {});
+  }
+  window.hideToTray = hideToTray;
+
+  /* ---------------- 存储 / 提醒 / 配置向导 ---------------- */
+  function saveStorage() {
+    var st = { keep_body_days: parseInt($('f_keep_body_days').value, 10) || 0,
+               keep_cache_days: parseInt($('f_keep_cache_days').value, 10) || 0 };
+    api('/api/config', 'POST', { config: { storage: st }, summary: '存储清理设置' }).then(function (r) {
+      if (!ok(r)) { toast('保存失败：' + ((r.data || {}).message || '未知错误')); return; }
+      toast('清理设置已保存'); loadConfig();
+    });
+  }
+  window.saveStorage = saveStorage;
+
+  var ALERT_TYPES = [['price_above', '价格高于'], ['price_below', '价格低于'],
+    ['pct_up', '涨幅达到(%)'], ['pct_down', '跌幅达到(%)'], ['ma20_above', '站上 MA20'], ['ma20_below', '跌破 MA20']];
+  function renderAlerts(rules) {
+    rules = rules || [];
+    $('alertList').innerHTML = rules.map(function (r, i) {
+      return '<div class="alertrow" data-i="' + i + '">' +
+        '<select>' + ALERT_TYPES.map(function (t) { return '<option value="' + t[0] + '"' + (r.type === t[0] ? ' selected' : '') + '>' + t[1] + '</option>'; }).join('') + '</select>' +
+        '<input class="val" type="number" step="0.01" value="' + esc(r.value) + '">' +
+        '<input class="note" placeholder="备注（选填）" value="' + esc(r.note || '') + '">' +
+        '<button class="sw' + (r.enabled !== false ? ' on' : '') + '" onclick="tog(this)"><i></i></button>' +
+        '<button class="mini del" onclick="delAlert(' + i + ')">删除</button></div>';
+    }).join('') || '<div class="empty">还没有提醒规则</div>';
+  }
+  function addAlert() {
+    var rules = collectAlerts(); rules.push({ type: 'price_above', value: 600, note: '', enabled: true });
+    renderAlerts(rules);
+  }
+  window.addAlert = addAlert;
+  function delAlert(i) {
+    var rules = collectAlerts(); rules.splice(i, 1); renderAlerts(rules);
+  }
+  window.delAlert = delAlert;
+  function collectAlerts() {
+    var rows = document.querySelectorAll('#alertList .alertrow'), out = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i], v = parseFloat(r.querySelector('.val').value);
+      if (isNaN(v)) continue;
+      out.push({ id: 'r' + i, type: r.querySelector('select').value, value: v,
+                 note: r.querySelector('.note').value.slice(0, 60),
+                 enabled: r.querySelector('.sw').className.indexOf('on') >= 0 });
+    }
+    return out;
+  }
+  function saveAlerts() {
+    var al = { enabled: isOn('f_al_enabled'), send_mail: isOn('f_al_mail'),
+               cooldown_hours: parseFloat($('f_al_cooldown').value) || 0, rules: collectAlerts() };
+    api('/api/config', 'POST', { config: { alerts: al }, summary: '到价提醒设置' }).then(function (r) {
+      if (!ok(r)) { toast('保存失败：' + ((r.data || {}).message || '未知错误')); return; }
+      toast('提醒设置已保存，行情采集后立即生效'); loadConfig();
+    });
+  }
+  window.saveAlerts = saveAlerts;
+
+  function openSetup() {
+    var s = (C && C.smtp) || {}, d = (C && C.deepseek) || {};
+    $('wz_user').value = s.user || ''; $('wz_host').value = s.host || 'smtp.qq.com';
+    $('wz_port').value = s.port || 465; $('wz_security').value = s.security || 'ssl_tls';
+    $('wz_cred').value = ''; $('wz_to').value = (s.to || []).join(', ') || (s.user || '');
+    $('wz_ds').value = ''; $('wz_time').value = ((C && C.daily_all) || {}).time || '20:30';
+    $('setupTip').textContent = '';
+    $('setupModal').className = 'modal-mask show';
+  }
+  window.openSetup = openSetup;
+  function closeSetup(done) {
+    $('setupModal').className = 'modal-mask';
+    if (done) api('/api/config', 'POST', { config: { setup: { done: true } }, summary: '配置向导已跳过' });
+  }
+  window.closeSetup = closeSetup;
+  function setupConfig(markDone) {
+    var user = $('wz_user').value.trim(), to = ($('wz_to').value.trim() || user);
+    var cfg = {
+      smtp: { enabled: !!user, host: $('wz_host').value.trim(), port: parseInt($('wz_port').value, 10) || 465,
+              security: $('wz_security').value, user: user,
+              to: to.split(/[,，;]/).map(function (x) { return x.trim(); }).filter(Boolean),
+              credential: $('wz_cred').value || '__KEEP_EXISTING__' },
+      deepseek: { api_key: $('wz_ds').value || '__KEEP_EXISTING__' },
+      daily_all: { time: $('wz_time').value || '20:30', send_mail: true },
+      setup: { done: markDone === true }
+    };
+    return cfg;
+  }
+  function testSetupMail() {
+    api('/api/config', 'POST', { config: setupConfig(false), summary: '配置向导保存并测试' }).then(function (r) {
+      if (!ok(r)) { $('setupTip').textContent = '保存失败：' + ((r.data || {}).message || '未知错误'); return; }
+      api('/api/test/mail', 'POST', {}).then(function (r2) {
+        var d = r2.data || {};
+        $('setupTip').textContent = d.ok ? '测试邮件已发出，请查收（含垃圾箱）' : ('测试失败：' + (d.message || '未知错误'));
+      });
+    });
+  }
+  window.testSetupMail = testSetupMail;
+  function finishSetup() {
+    api('/api/config', 'POST', { config: setupConfig(true), summary: '配置向导完成' }).then(function (r) {
+      if (!ok(r)) { $('setupTip').textContent = '保存失败：' + ((r.data || {}).message || '未知错误'); return; }
+      closeSetup(); toast('配置已保存，每日内容会按新时间生成'); loadConfig();
+    });
+  }
+  window.finishSetup = finishSetup;
 
   /* ---------------- 启动 ---------------- */
   function clock() {

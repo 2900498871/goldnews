@@ -141,6 +141,10 @@ def make_handler(inst: Instance):
                     return _json(self, d)
                 if p == "/api/daily":
                     return _json(self, self._daily_get((q.get("kind") or ["news"])[0], q))
+                if p == "/api/daily/progress":
+                    return _json(self, inst.daily.progress_state())
+                if p == "/api/daily/docs":
+                    return _json(self, self._daily_docs(q))
                 if p == "/api/daily/article":
                     # 列表点标题：读本机正文；没存过就按需现抓一次
                     return _json(self, inst.daily.article_detail(
@@ -178,12 +182,16 @@ def make_handler(inst: Instance):
                     if os.name != "nt":
                         return _json(self, {"ok": False, "message": "仅 Windows 桌面端支持窗口控制"})
                     try:
-                        from launcher import window_action
+                        from launcher import window_action, notify
                         act = str(body.get("action") or "info")
-                        r = window_action(act, float(body.get("dx") or 0),
-                                          float(body.get("dy") or 0),
-                                          float(body.get("cap") or 0),
-                                          float(body.get("dpr") or 0))
+                        if act == "notify":
+                            r = {"ok": notify(str(body.get("title") or "黄金积存金助手"),
+                                              str(body.get("text") or ""))}
+                        else:
+                            r = window_action(act, float(body.get("dx") or 0),
+                                              float(body.get("dy") or 0),
+                                              float(body.get("cap") or 0),
+                                              float(body.get("dpr") or 0))
                         if act in ("close", "quit") and r.get("ok"):
                             threading.Timer(0.8, self.server.shutdown).start()
                             inst.log.info("收到退出指令，窗口与后台服务同步停止")
@@ -262,6 +270,27 @@ def make_handler(inst: Instance):
                     return _json(self, inst.daily.run_digest(kind, trigger="manual", force=bool(body.get("force")),
                                                              send_mail=None if sm is None else bool(sm),
                                                              period=body.get("period")))
+                if p == "/api/daily/preview":
+                    return _json(self, inst.daily.mail_preview(
+                        mode="digest" if body.get("mode") == "digest" else "day",
+                        period=body.get("period")))
+                if p == "/api/export/daily":
+                    from engine.export import export_daily_month
+                    return _json(self, export_daily_month(
+                        inst, body.get("kind") or "news", body.get("month") or ""))
+                if p == "/api/export/doc":
+                    from engine.export import export_doc
+                    return _json(self, export_doc(inst, body.get("path") or "",
+                                                  body.get("format") or "doc"))
+                if p == "/api/export/trades":
+                    from engine.export import export_trades_csv
+                    return _json(self, export_trades_csv(inst))
+                if p == "/api/export/backup":
+                    from engine.export import backup_zip
+                    return _json(self, backup_zip(inst))
+                if p == "/api/export/open":
+                    from engine.export import open_path
+                    return _json(self, open_path(inst, body.get("path") or ""))
                 if p == "/api/daily/open":
                     kind = body.get("kind") if body.get("kind") in ("news", "brief", "mil") else "news"
                     folder = inst.daily.doc_dir(kind)
@@ -326,6 +355,35 @@ def make_handler(inst: Instance):
             if q.get("path"):
                 return inst.daily.read_doc(kind, (q.get("path") or [""])[0])
             return inst.daily.state(kind)
+
+        def _daily_docs(self, q: dict) -> dict:
+            """每日文档/汇总查询：按月份、关键词过滤，供日历与搜索使用。"""
+            kind = (q.get("kind") or ["news"])[0]
+            if kind not in ("news", "brief", "mil"):
+                kind = "news"
+            month = (q.get("month") or [""])[0].strip()
+            text = (q.get("q") or [""])[0].strip()
+            start = end = None
+            if month:
+                start, end = month + "-01", month + "-31"
+            where, args = "kind=?", [kind]
+            if start:
+                where += " AND day>=? AND day<=?"
+                args += [start, end]
+            if text:
+                where += " AND (summary_md LIKE ? OR day LIKE ?)"
+                args += ["%" + text + "%", "%" + text + "%"]
+            rows = inst.db.rows(
+                "SELECT day,path,ai_available,summary_md,counts_json,generated_at FROM daily_doc "
+                "WHERE %s ORDER BY day DESC LIMIT 400" % where, tuple(args))
+            out = []
+            for r in rows:
+                d = dict(r)
+                d["snippet"] = re.sub(r"[#>*`\-]+", "", (d.pop("summary_md", "") or ""))[:120].strip()
+                out.append(d)
+            dg = inst.db.recent_digests(kind, 60)
+            return {"ok": True, "kind": kind, "month": month, "q": text,
+                    "docs": out, "digests": [dict(x) for x in dg]}
 
         def _schedule_op(self, body: dict) -> dict:
             cfg = inst.cfg.get()

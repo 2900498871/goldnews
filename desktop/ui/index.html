@@ -19,6 +19,7 @@
       <button class="btn sm" onclick="runSelfcheck()">自检</button>
       <button class="btn sm" id="quitBtn" onclick="quitApp()">退出</button>
       <div class="winctrls" id="winCtrls">
+        <button class="winbtn" id="winTray" title="收进托盘（双击托盘图标恢复）" onclick="hideToTray()">▾</button>
         <button class="winbtn" id="winMin" title="最小化">─</button>
         <button class="winbtn" id="winMax" title="最大化 / 还原">□</button>
       </div>
@@ -193,6 +194,8 @@
       <section class="page" id="page-daily">
         <div class="phead"><div><h2>每日新闻 · 每日资讯 · 军事新闻</h2><p id="dlSub">央视新闻 + 互联网热搜 → AI 总结 → 每日本地文档 → 周期汇总发送到邮箱</p></div>
           <div class="acts"><button class="btn sm" id="dlOpenBtn" onclick="openDocFolder()">打开文档文件夹</button>
+            <button class="btn sm" onclick="previewMail('day')">预览合并邮件</button>
+            <button class="btn sm" onclick="exportBackup()">备份全部</button>
             <button class="btn sm pri" id="dlRunBtn" onclick="runDaily()">立即采集并 AI 总结</button></div></div>
         <div class="ktabs" id="dlKind">
           <button class="ktab on" data-kind="news" onclick="setDailyKind('news')">每日新闻（央视 + 热搜）</button>
@@ -214,7 +217,16 @@
         <div class="card mt"><div class="ch"><h3 id="dlListTitle">今日新闻列表</h3><span class="sub" id="dlListSub">按栏目 / 平台排名排列，点击标题可打开原文</span></div>
           <div class="ktabs" id="dlSrcTabs"></div>
           <div id="dlList"></div></div>
-        <div class="card mt"><div class="ch"><h3>历史文档与汇总记录</h3><span class="sub">点日期即可预览文档 · 本机 Markdown</span></div>
+        <div class="card mt"><div class="ch"><h3>历史文档与汇总记录</h3><span class="sub">日历选日 / 关键词搜索 · 点日期预览 · 可导出或重新生成</span></div>
+          <div class="btnrow" style="margin-bottom:10px">
+            <input id="dlMonth" type="month" class="mini" style="width:150px" onchange="loadDailyDocs()">
+            <input id="dlSearch" placeholder="搜索日期或文档内容" style="width:220px" oninput="searchDailyDocs()">
+            <button class="btn sm" onclick="loadDailyDocs()">查询</button>
+            <button class="btn sm" onclick="exportDailyMonth()">导出本月</button>
+            <button class="btn sm" onclick="exportTodayDoc('doc')">导出今日 Word</button>
+            <button class="btn sm" onclick="exportTodayDoc('pdf')">导出今日 PDF</button>
+          </div>
+          <div id="dlCal" class="calgrid"></div>
           <div id="dlDocs"><div class="empty">尚无记录</div></div></div>
       </section>
 
@@ -364,10 +376,36 @@
           </div>
           <div class="btnrow"><button class="btn pri" onclick="saveDailyAll()">保存每日内容设置</button>
             <button class="btn" onclick="runDailyAll()">立即生成三份并合并发信</button>
+            <button class="btn" onclick="previewMail('day')">预览合并邮件</button>
+            <button class="btn" onclick="openSetup()">配置向导</button>
             <button class="btn" onclick="go('daily')">打开每日新闻</button>
             <button class="btn" onclick="go('daily');setDailyKind('brief')">打开每日资讯</button>
             <button class="btn" onclick="go('daily');setDailyKind('mil')">打开军事新闻</button></div>
+          <div id="daProgress" class="hint mt" style="display:none"></div>
           <div class="hint mt">汇总周期可多选：每周 = 上一个自然周（周一至周日），周一到期；每月 = 上一个自然月；电脑当时关机，下次开机到点会自动补做。汇总时间建议晚于生成时间，这样当天文档也会计入汇总。发送邮件需先在上方启用 SMTP。</div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>存储与清理</h3><span class="sub">日志自动轮转；正文缓存按天清理，Markdown 文档永久保留</span></div>
+          <div class="form gridform">
+            <label>正文 HTML 保留天数</label><input id="f_keep_body_days" type="number" value="365" min="0" max="3650">
+            <label>文章缓存保留天数</label><input id="f_keep_cache_days" type="number" value="180" min="0" max="3650">
+          </div>
+          <div class="hint mt">填 0 表示永久保留。清理只删除「YYYY-MM-DD.正文.html」和数据库里的正文缓存，每日 Markdown 与汇总文档不动。</div>
+          <div class="btnrow"><button class="btn pri" onclick="saveStorage()">保存清理设置</button>
+            <button class="btn" onclick="exportBackup()">立即备份配置与文档</button>
+            <button class="btn" onclick="exportTrades()">导出持仓 CSV</button></div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>到价 / 均线提醒</h3><span class="sub">行情采集到就检查；同一条规则在冷却时间内不重复发信</span></div>
+          <div class="form gridform">
+            <label>启用提醒 <button class="sw on" id="f_al_enabled" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>命中后发邮件 <button class="sw on" id="f_al_mail" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>同一规则冷却（小时）</label><input id="f_al_cooldown" type="number" value="12" min="0" max="240">
+          </div>
+          <div id="alertList" class="mt"></div>
+          <div class="btnrow"><button class="btn sm" onclick="addAlert()">新增一条提醒</button>
+            <button class="btn pri sm" onclick="saveAlerts()">保存提醒设置</button></div>
+          <div class="hint mt">价格默认看 Au99.99；「涨幅/跌幅」按本端上一个快照计算；MA20 用最近 20 条本端报价。提醒只描述条件命中，不构成买卖建议。</div>
         </div>
 
         <div class="card mt"><div class="ch"><h3>一键自检</h3><button class="btn sm" onclick="runSelfcheck('settings')">运行</button></div>
@@ -414,6 +452,32 @@
       </span>
     </div>
     <div id="artBody" class="docbody"></div></div>
+</div>
+<div class="modal-mask" id="mailModal">
+  <div class="modal wide"><h3 id="mailSubject">合并邮件预览</h3>
+    <div class="btnrow"><button class="btn sm" onclick="setMailWidth(760)">桌面宽度</button><button class="btn sm" onclick="setMailWidth(390)">手机宽度</button><button class="btn sm" onclick="closeMail()">关闭</button><span class="hint" id="mailPath"></span></div>
+    <iframe id="mailFrame" style="width:760px;max-width:100%;height:70vh;border:1px solid #E3E6EC;border-radius:8px;background:#fff"></iframe>
+  </div>
+</div>
+
+<div class="modal-mask" id="setupModal">
+  <div class="modal"><h3>首次配置向导</h3>
+    <p class="hint">三步完成后就能收合并日报；密钥与授权码只存本机。以后可在设置页随时改。</p>
+    <div class="form" style="display:block">
+      <label>1. 发件邮箱</label><input id="wz_user" placeholder="2900498871@qq.com">
+      <label>SMTP 服务器</label><input id="wz_host" value="smtp.qq.com">
+      <label>端口 / 加密</label><div class="inline"><input id="wz_port" type="number" value="465" style="width:90px">
+        <select id="wz_security"><option value="ssl_tls">SSL/TLS</option><option value="starttls">STARTTLS</option></select></div>
+      <label>邮箱授权码</label><input id="wz_cred" type="password" placeholder="QQ 邮箱设置里生成的授权码">
+      <label>收件人</label><input id="wz_to" placeholder="默认发给发件邮箱自己">
+      <label>2. DeepSeek Key</label><input id="wz_ds" type="password" placeholder="sk-...（可稍后再填）">
+      <label>3. 每日内容时间</label><input id="wz_time" type="time" value="20:30">
+    </div>
+    <div class="btnrow"><button class="btn" onclick="closeSetup(true)">以后再说</button>
+      <button class="btn" onclick="testSetupMail()">测试邮件</button>
+      <button class="btn pri" onclick="finishSetup()">保存并完成</button></div>
+    <div class="hint mt" id="setupTip"></div>
+  </div>
 </div>
 <div class="exitmask" id="exitMask"><div class="exitbox"><h3>本端程序已退出</h3>
   <p>后台调度器与本地服务已停止，可以关闭此窗口。</p>
