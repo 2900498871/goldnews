@@ -1708,6 +1708,24 @@
   }
   window.restoreSelected = restoreSelected;
   var MG_SELECTED = '';
+  var MG_BUSY = false;
+  var MG_PREVIEW = null;
+  var MG_PREVIEW_SEQ = 0;
+  var MG_POLL = null;
+  var MG_SECTIONS_BOUND = false;
+  var MG_PREVIEW_TIMER = null;
+  var MG_SECTION_DEFS = [
+    { key: 'news', label: '新闻/榜单' },
+    { key: 'articles', label: '正文缓存' },
+    { key: 'prices', label: '黄金价格' },
+    { key: 'tasks', label: '任务记录' },
+    { key: 'signals', label: 'AI 研判' },
+    { key: 'reports', label: '报告/发送记录' },
+    { key: 'history', label: '历史分析' },
+    { key: 'logs', label: '运行日志' },
+    { key: 'documents', label: '每日文档' }
+  ];
+
   function backupRowsHtml(bs, action) {
     return bs.map(function (b) {
       return '<div class="bkrow" data-name="' + esc(b.name) + '" onclick="' + action + '(this)">' +
@@ -1716,57 +1734,257 @@
         (b.include_secrets ? ' · 含加密密钥' : ' · 不含密钥') + '</small></div>';
     }).join('');
   }
+
+  function mgSectionsHtml() {
+    return MG_SECTION_DEFS.map(function (s) {
+      return '<label class="chk"><input type="checkbox" data-sec="' + s.key + '" checked>' +
+        esc(s.label) + '</label>';
+    }).join('');
+  }
+
+  function mgSelectedSections() {
+    var nodes = document.querySelectorAll('#mgSections input');
+    var out = [];
+    for (var i = 0; i < nodes.length; i++) if (nodes[i].checked) out.push(nodes[i].getAttribute('data-sec'));
+    return out;
+  }
+
+  function mgUpdateBtn() {
+    $('mgBtn').disabled = MG_BUSY || !MG_PREVIEW || !MG_PREVIEW.has_changes ||
+      mgSelectedSections().length === 0;
+    $('mgPreviewBtn').disabled = MG_BUSY;
+  }
+
+  function mgSetBusy(on) {
+    MG_BUSY = !!on;
+    var nodes = document.querySelectorAll('#mgSections input');
+    for (var i = 0; i < nodes.length; i++) nodes[i].disabled = MG_BUSY;
+    if (MG_BUSY) {
+      $('mgBtn').disabled = true;
+      $('mgPreviewBtn').disabled = true;
+    } else {
+      mgUpdateBtn();
+    }
+  }
+
+  function mgCategoryHtml(d) {
+    var cats = d.categories || [];
+    var html = '';
+    for (var i = 0; i < cats.length; i++) {
+      var c = cats[i];
+      if (!c.selected) continue;
+      var val;
+      if (c.key === 'documents') {
+        val = '新增 ' + (c.added || 0) + ' · 冲突另存 ' + (c.conflict || 0) +
+          ' · 重复 ' + (c.duplicate || 0);
+      } else {
+        val = '+' + (c.added || 0) + '，重复 ' + (c.duplicate || 0) +
+          (c.skipped ? '，跳过 ' + c.skipped : '');
+      }
+      html += '<div class="srcrow"><span class="sid">' + esc(c.label) + '</span>' +
+        '<span class="sv">' + esc(val) + '</span></div>';
+    }
+    return html;
+  }
+
+  function mgConflictHtml(docs) {
+    docs = docs || {};
+    if (!docs.conflicts || !docs.conflicts.length) return '';
+    var html = '<div class="hint mt"><b>冲突文档副本（' + (docs.conflict || docs.conflicts.length) + '）：</b><br>';
+    var n = Math.min(8, docs.conflicts.length);
+    for (var i = 0; i < n; i++) html += esc(docs.conflicts[i]) + '<br>';
+    if (docs.conflicts.length > n) html += '…等 ' + docs.conflicts.length + ' 个';
+    return html + '</div>';
+  }
+
+  function mgPreviewHtml(d) {
+    var src = d.source || {};
+    var docs = d.documents || {};
+    var html = '<div class="srcrow"><span class="sid">来源备份</span><span class="sv">' +
+      esc(d.backup || '') + ' · ' + (Math.round((src.size || 0) / 1024 / 1024 * 10) / 10) + ' MB</span></div>';
+    html += '<div class="srcrow"><span class="sid">备份版本</span><span class="sv">v' +
+      esc(src.version == null ? '—' : src.version) + ' · 数据库 v' +
+      esc(src.schema_version == null ? '—' : src.schema_version) + ' · 创建 ' +
+      esc(fmtBj(src.created_at)) + '</span></div>';
+    if (src.instance_id) {
+      html += '<div class="srcrow"><span class="sid">来源实例</span><span class="sv">' +
+        esc(src.instance_id) + '</span></div>';
+    }
+    html += '<div class="mt">' + mgCategoryHtml(d) + '</div>';
+    html += mgConflictHtml(docs);
+    if (!d.has_changes) html += '<div class="hint mt">没有可补充的新记录或文档。</div>';
+    return html;
+  }
+
+  function mgMergeResultHtml(d) {
+    var html = '<div class="hint"><b>' + esc(d.message || '合并完成') + '</b></div>';
+    html += '<div class="mt">' + mgCategoryHtml(d) + '</div>';
+    html += mgConflictHtml(d.documents || {});
+    if (d.pre_merge_backup) {
+      html += '<div class="hint mt">合并前本机备份：' + esc(d.pre_merge_backup) + '</div>';
+    }
+    return html;
+  }
+
+  function mgStopPoll() {
+    if (MG_POLL) { clearInterval(MG_POLL); MG_POLL = null; }
+  }
+
+  function mgStartPoll() {
+    mgStopPoll();
+    MG_POLL = setInterval(function () {
+      api('/api/export/merge/status', 'GET').then(function (r) {
+        var d = r.data || {};
+        if (!d.ok) return;
+        if (typeof d.percent === 'number') {
+          $('mgBarWrap').style.display = 'flex';
+          $('mgBar').style.width = Math.max(0, Math.min(100, d.percent)) + '%';
+          $('mgPct').textContent = Math.max(0, Math.min(100, d.percent)) + '%';
+        }
+        if (d.message) $('mgTip').textContent = d.message;
+      }).catch(function () {});
+    }, 700);
+  }
+
+  function previewMerge(manual) {
+    if (MG_BUSY) return;
+    MG_PREVIEW_SEQ += 1;
+    var seq = MG_PREVIEW_SEQ;
+    if (!MG_SELECTED) { $('mgTip').textContent = '请先选择一个备份'; return; }
+    var sections = mgSelectedSections();
+    MG_PREVIEW = null;
+    mgUpdateBtn();
+    if (!sections.length) {
+      $('mgPreview').innerHTML = '';
+      $('mgTip').textContent = '请至少选择一个合并类别';
+      return;
+    }
+    $('mgPreviewBtn').disabled = true;
+    $('mgTip').textContent = '正在预览，不会写入任何数据…';
+    $('mgPreview').innerHTML = '<div class="empty">正在读取并比对备份…</div>';
+    api('/api/export/merge/preview', 'POST', { name: MG_SELECTED, sections: sections }).then(function (r) {
+      if (seq !== MG_PREVIEW_SEQ) return;
+      $('mgPreviewBtn').disabled = false;
+      var d = r.data || {};
+      if (!ok(r)) {
+        MG_PREVIEW = null;
+        $('mgPreview').innerHTML = '';
+        $('mgTip').textContent = '预览失败：' + (d.message || '未知错误');
+        mgUpdateBtn();
+        return;
+      }
+      MG_PREVIEW = d;
+      $('mgPreview').innerHTML = mgPreviewHtml(d);
+      $('mgTip').textContent = d.has_changes ? '预览不会写入数据，确认范围后再点“开始合并”。' : '没有可补充的数据';
+      mgUpdateBtn();
+    }).catch(function (e) {
+      if (seq !== MG_PREVIEW_SEQ) return;
+      $('mgPreviewBtn').disabled = false;
+      MG_PREVIEW = null;
+      $('mgPreview').innerHTML = '';
+      $('mgTip').textContent = '预览失败：' + e;
+      mgUpdateBtn();
+    });
+  }
+
   function openMerge() {
-    MG_SELECTED = ''; $('mgTip').textContent = ''; $('mgBtn').disabled = false;
+    MG_SELECTED = ''; MG_BUSY = false; MG_PREVIEW = null; MG_PREVIEW_SEQ += 1;
+    mgStopPoll();
+    if (MG_PREVIEW_TIMER) { clearTimeout(MG_PREVIEW_TIMER); MG_PREVIEW_TIMER = null; }
+    $('mgTip').textContent = ''; $('mgPreview').innerHTML = '';
+    $('mgBarWrap').style.display = 'none'; $('mgBar').style.width = '0%'; $('mgPct').textContent = '0%';
+    $('mgSections').innerHTML = mgSectionsHtml();
+    if (!MG_SECTIONS_BOUND) {
+      MG_SECTIONS_BOUND = true;
+      $('mgSections').addEventListener('change', function () {
+        if (MG_BUSY) return;
+        MG_PREVIEW_SEQ += 1;
+        MG_PREVIEW = null;
+        mgUpdateBtn();
+        if (MG_PREVIEW_TIMER) clearTimeout(MG_PREVIEW_TIMER);
+        MG_PREVIEW_TIMER = setTimeout(function () { previewMerge(); }, 300);
+      });
+    }
+    mgUpdateBtn();
     $('mgList').innerHTML = '<div class="empty">正在读取备份…</div>';
     $('mergeModal').className = 'modal-mask show';
     api('/api/export/backups', 'GET').then(function (r) {
       var bs = (r.data || {}).backups || [];
       if (!bs.length) {
         $('mgList').innerHTML = '<div class="empty">还没有备份文件，请先把另一台电脑的备份放入 data\\exports</div>';
-        $('mgBtn').disabled = true;
+        mgUpdateBtn();
         return;
       }
       $('mgList').innerHTML = backupRowsHtml(bs, 'selectMerge');
       MG_SELECTED = bs[0].name;
       var first = $('mgList').firstChild; if (first) first.classList.add('sel');
-    }).catch(function (e) { $('mgList').innerHTML = '<div class="empty">读取失败：' + esc(String(e)) + '</div>'; });
+      previewMerge();
+    }).catch(function (e) {
+      $('mgList').innerHTML = '<div class="empty">读取失败：' + esc(String(e)) + '</div>';
+      mgUpdateBtn();
+    });
   }
   window.openMerge = openMerge;
+
   function selectMerge(el) {
+    if (MG_BUSY) return;
     var all = document.querySelectorAll('#mgList .bkrow');
     for (var i = 0; i < all.length; i++) all[i].classList.remove('sel');
     el.classList.add('sel'); MG_SELECTED = el.getAttribute('data-name') || '';
+    MG_PREVIEW = null;
+    $('mgTip').textContent = '';
+    previewMerge();
   }
   window.selectMerge = selectMerge;
-  function closeMerge() { $('mergeModal').className = 'modal-mask'; }
+
+  function closeMerge() {
+    if (MG_BUSY) { toast('合并正在进行，请稍候'); return; }
+    MG_PREVIEW_SEQ += 1;
+    if (MG_PREVIEW_TIMER) { clearTimeout(MG_PREVIEW_TIMER); MG_PREVIEW_TIMER = null; }
+    $('mergeModal').className = 'modal-mask';
+  }
   window.closeMerge = closeMerge;
+
   function mergeSelected() {
+    if (MG_BUSY) return;
     if (!MG_SELECTED) { $('mgTip').textContent = '请先选择一个备份'; return; }
-    if (!confirm('将把该备份的数据补充到本机；本机配置、密钥、持仓和调度状态不会被覆盖。继续？')) return;
-    $('mgBtn').disabled = true;
+    var sections = mgSelectedSections();
+    if (!sections.length) { $('mgTip').textContent = '请至少选择一个合并类别'; return; }
+    if (!MG_PREVIEW || (MG_PREVIEW.sections || []).join(',') !== sections.join(',')) {
+      $('mgTip').textContent = '合并范围已变化，正在重新预览…';
+      previewMerge();
+      return;
+    }
+    if (!MG_PREVIEW.has_changes) { $('mgTip').textContent = '没有可补充的数据'; return; }
+    var docs = MG_PREVIEW.documents || {};
+    if (!confirm('将向本机补充 ' + (MG_PREVIEW.summary.news || 0) + ' 条新闻/榜单、' +
+      (MG_PREVIEW.summary.prices || 0) + ' 条价格、' + (MG_PREVIEW.summary.tasks || 0) +
+      ' 条任务记录，新增文档 ' + (docs.added || 0) + ' 份、冲突另存 ' + (docs.conflict || 0) +
+      ' 份。本机配置、密钥、持仓和调度状态不会被覆盖，继续？')) return;
+    $('mgBarWrap').style.display = 'flex';
+    $('mgBar').style.width = '0%'; $('mgPct').textContent = '0%';
     $('mgTip').textContent = '正在合并，程序会先自动备份本机数据…';
-    api('/api/export/merge', 'POST', { name: MG_SELECTED }).then(function (r) {
+    mgSetBusy(true);
+    mgStartPoll();
+    api('/api/export/merge', 'POST', { name: MG_SELECTED, sections: sections }).then(function (r) {
+      mgStopPoll();
+      mgSetBusy(false);
       var d = r.data || {};
       if (!ok(r)) {
         $('mgTip').textContent = '合并失败：' + (d.message || '未知错误');
-        $('mgBtn').disabled = false;
         return;
       }
-      var docs = d.documents || {};
-      var html = '<b>' + esc(d.message || '合并完成') + '</b>';
-      if (docs.conflicts && docs.conflicts.length) {
-        html += '<div class="hint mt">冲突文档副本：' + esc(docs.conflicts.slice(0, 5).join('；')) +
-          (docs.conflicts.length > 5 ? ' 等' : '') + '</div>';
-      }
-      if (d.pre_merge_backup) html += '<div class="hint mt">合并前本机备份：' + esc(d.pre_merge_backup) + '</div>';
-      $('mgTip').innerHTML = html;
-      $('mgBtn').disabled = false;
+      $('mgBar').style.width = '100%'; $('mgPct').textContent = '100%';
+      $('mgPreview').innerHTML = mgMergeResultHtml(d);
+      $('mgTip').textContent = '合并完成，本机数据已补充';
+      MG_PREVIEW = null;
+      mgUpdateBtn();
       toast('合并完成，本机数据已补充');
       loadState();
     }).catch(function (e) {
+      mgStopPoll();
+      mgSetBusy(false);
       $('mgTip').textContent = '合并失败：' + e;
-      $('mgBtn').disabled = false;
     });
   }
   window.mergeSelected = mergeSelected;

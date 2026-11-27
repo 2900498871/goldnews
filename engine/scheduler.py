@@ -33,6 +33,27 @@ class Scheduler:
         self._catchup_thread = None
         self.current_job = ""           # 当前正在写的文档任务（任务中心展示）
         self._daily_busy = threading.Event()   # 日报/汇总/补生成互斥，避免并发写同一批文档
+        self._pause_event = threading.Event()  # 合并导入等维护任务期间暂停采集
+        self.pause_reason = ""
+
+    def pause(self, reason: str = ""):
+        """暂停调度与采集；用于备份合并等需要独占数据库的维护任务。"""
+        self.pause_reason = str(reason or "")
+        self._pause_event.set()
+
+    def resume(self):
+        self._pause_event.clear()
+        self.pause_reason = ""
+
+    def is_paused(self) -> bool:
+        return self._pause_event.is_set()
+
+    def is_busy(self) -> bool:
+        """是否已有日报/汇总/补生成在写文档。"""
+        return bool(self._daily_busy.is_set() or
+                    (self.daily_thread and self.daily_thread.is_alive()) or
+                    (self._catchup_thread and self._catchup_thread.is_alive()))
+
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -199,6 +220,7 @@ class Scheduler:
                 "daily_running": bool(self.daily_thread and self.daily_thread.is_alive()),
                 "catchup_running": bool(self._catchup_thread and self._catchup_thread.is_alive()),
                 "busy": bool(self._daily_busy.is_set()),
+                "paused": self.is_paused(), "pause_reason": self.pause_reason,
                 "current_job": self.current_job or "",
                 "next": next_runs, "upcoming": upcoming, "next_push": self._next_push(cfg),
                 "recent_slots": recent, "recent_tasks": task_runs,
@@ -304,22 +326,30 @@ class Scheduler:
 
     def _tick(self):
         import time
+        if self.is_paused():
+            return
         self._reload_config()
         cfg = self.cfg.get()
         self.next_push = self._next_push(cfg)
         # 1) 分时段价格轮询（只采集，不发信）
         interval = max(1, self._poll_minutes(cfg)) * 60
         if time.time() - self.last_collect >= interval:
+            if self.is_paused():
+                return
             self.last_collect = time.time()
             try:
                 r = self.pipeline.run(kind="prices", trigger="scheduled", send_mail=False)
                 self._check_alert(cfg, r)
             except Exception as e:
                 self.log.warning("定时采集失败：%s", str(e)[:160])
+        if self.is_paused():
+            return
         # 1.5) 每日新闻 / 每日资讯文档 + 周期汇总（有独立开关，不看下面的推送总开关）
         now = now_bj()
         today = now.strftime("%Y-%m-%d")
         self._check_daily_jobs(cfg, now, today)
+        if self.is_paused():
+            return
         # 2) 用户自定义时点
         if not cfg.get("push_master_switch", True):
             return
@@ -379,6 +409,8 @@ class Scheduler:
         """
         if not self.daily:
             return
+        if self.is_paused():
+            return
         pending = []
         plan = cfg.get("daily_all") or {}
         if plan.get("enabled"):
@@ -414,6 +446,9 @@ class Scheduler:
         def work():
             try:
                 for job, key in pending:
+                    if self.is_paused():
+                        self.log.info("合并/维护期间暂停每日任务：%s", key)
+                        break
                     self.db.mark_slot_fired(key, "running")
                     if job[0] == "day_all":
                         self.current_job = "每日内容（三份文档）"

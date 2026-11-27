@@ -519,9 +519,13 @@
     <div class="hint">只补充本机缺少的记录，不会覆盖本机配置、密钥、持仓和调度状态。相同记录自动跳过；同名但内容不同的每日文档会另存为「另一台电脑」副本。</div>
     <div class="hint mt">先把另一台电脑生成的备份 zip 放进本机 <b>data\exports</b> 目录，再在下面选择。</div>
     <div id="mgList" class="mt"></div>
-    <div class="btnrow"><button class="btn" onclick="closeMerge()">取消</button>
-      <button class="btn pri" id="mgBtn" onclick="mergeSelected()">开始合并</button></div>
+    <div class="mt"><b>合并范围</b><div id="mgSections" class="mt" style="display:flex;flex-wrap:wrap;gap:8px 16px"></div></div>
+    <div id="mgPreview" class="mt"></div>
+    <div class="barrow mt" id="mgBarWrap" style="display:none"><span class="lb">合并进度</span><div class="bartrack"><div class="barfill" id="mgBar" style="width:0%"></div></div><span class="vl" id="mgPct">0%</span></div>
     <div class="hint mt" id="mgTip"></div>
+    <div class="btnrow" style="position:sticky;bottom:-20px;background:#fff;padding-top:12px;border-top:1px solid var(--line);z-index:2"><button class="btn" onclick="closeMerge()">取消</button>
+      <button class="btn" id="mgPreviewBtn" onclick="previewMerge(true)">重新预览</button>
+      <button class="btn pri" id="mgBtn" onclick="mergeSelected()" disabled>开始合并</button></div>
   </div>
 </div>
 

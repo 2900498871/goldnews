@@ -85,6 +85,9 @@ class Instance:
         self.history = PeriodAnalyzer(self.cfg, self.db, self.log)
         self.history_lock = threading.Lock()
         self._last_history_ts = 0.0
+        self.merge_lock = threading.Lock()
+        self.merge_state = {"running": False, "phase": "", "message": "", "percent": 0,
+                            "detail": "", "started_at": "", "finished_at": "", "error": ""}
         from engine.daily import DailyService
         # 「每日资讯」的素材就是「资讯与 AI 研判」页的内容：生成前先跑一次该页的新闻采集
         self.daily = DailyService(
@@ -201,6 +204,9 @@ def make_handler(inst: Instance):
                 if p == "/api/export/backups":
                     from engine.export import list_backups
                     return _json(self, list_backups(inst))
+                if p == "/api/export/merge/status":
+                    from engine.merge import merge_status
+                    return _json(self, merge_status(inst))
                 if p == "/api/daily/docs":
                     return _json(self, self._daily_docs(q))
                 if p == "/api/daily/article":
@@ -349,9 +355,14 @@ def make_handler(inst: Instance):
                 if p == "/api/export/backups":
                     from engine.export import list_backups
                     return _json(self, list_backups(inst))
+                if p == "/api/export/merge/preview":
+                    from engine.merge import preview_backup
+                    return _json(self, preview_backup(inst, body.get("name") or "",
+                                                      body.get("sections")))
                 if p == "/api/export/merge":
                     from engine.merge import merge_backup
-                    return _json(self, merge_backup(inst, body.get("name") or ""))
+                    return _json(self, merge_backup(inst, body.get("name") or "",
+                                                body.get("sections")))
                 if p == "/api/export/restore":
                     from engine.export import stage_restore
                     return _json(self, stage_restore(

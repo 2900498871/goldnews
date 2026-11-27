@@ -30,6 +30,7 @@ EDGE_CANDIDATES = [
 ]
 
 BACKUP_PREFIXES = ("GoldDesk-备份-", "日常小助手-备份-")
+BACKUP_MANIFEST_VERSION = 2
 
 
 def _exports_dir(inst) -> str:
@@ -283,6 +284,7 @@ def backup_zip(inst, include_secrets: bool = False, password: str = "") -> dict:
         dst = sqlite3.connect(tmpdb)
         with dst:
             src.backup(dst)
+        schema_version = int(dst.execute("PRAGMA user_version").fetchone()[0] or 0)
         src.close(); dst.close()
         doc_root = inst.daily.doc_root()
         files = []
@@ -307,7 +309,10 @@ def backup_zip(inst, include_secrets: bool = False, password: str = "") -> dict:
                 sec = _collect_secrets(inst)
                 z.writestr("secrets.enc", _encrypt_json(sec, password))
             manifest = {
-                "app": "GoldDesk", "version": 2, "created_at": now_bj().isoformat(),
+                "app": "GoldDesk", "version": BACKUP_MANIFEST_VERSION,
+                "schema_version": schema_version,
+                "instance_id": inst.cfg.instance_id,
+                "created_at": now_bj().isoformat(),
                 "include_secrets": bool(include_secrets),
                 "db_sha256": hashlib.sha256(open(tmpdb, "rb").read()).hexdigest(),
                 "documents": len(files), "doc_root": os.path.basename(doc_root.rstrip(os.sep)),
