@@ -77,7 +77,8 @@ class Mailer:
 
     def send_test_mail(self, override: dict | None = None) -> dict:
         s = self._settings(override)
-        subject = "【黄金积存金助手】测试邮件 · %s" % bj_str(now_bj(), "%Y-%m-%d %H:%M")
+        subject = "【%s】测试邮件 · %s" % (s.get("from_name") or "黄金积存金助手",
+                                          bj_str(now_bj(), "%Y-%m-%d %H:%M"))
         text = ("这是一封配置测试邮件，不是业务快报，不含任何行情数值或投资判断。\n"
                 "发送端：%s 独立实例 %s\n时间（北京）：%s\n\n%s" %
                 (self.cfg_store.get().get("app_kind"), self.cfg_store.instance_id, iso_bj(), DISCLAIMER))

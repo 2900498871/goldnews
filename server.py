@@ -24,7 +24,7 @@ from engine.db import DB  # noqa: E402
 from engine.history import PeriodAnalyzer, collect_history_news, resolve_range  # noqa: E402
 from engine.monitor import selfcheck  # noqa: E402
 from engine.pipeline import Pipeline  # noqa: E402
-from engine.renderer import render_history  # noqa: E402
+from engine.renderer import render_history, mail_prefix  # noqa: E402
 from engine.scheduler import Scheduler  # noqa: E402
 from engine.util import DISCLAIMER, get_logger, iso_bj  # noqa: E402
 
@@ -245,6 +245,17 @@ def make_handler(inst: Instance):
                     sm = body.get("send_mail")
                     return _json(self, inst.daily.run_day(kind, trigger="manual", force=bool(body.get("force")),
                                                           send_mail=None if sm is None else bool(sm)))
+                if p == "/api/daily/run_all":
+                    sm = body.get("send_mail")
+                    return _json(self, inst.daily.run_all_day(
+                        trigger="manual", force=bool(body.get("force")),
+                        send_mail=None if sm is None else bool(sm)))
+                if p == "/api/daily/digest_all":
+                    sm = body.get("send_mail")
+                    return _json(self, inst.daily.run_all_digest(
+                        trigger="manual", force=bool(body.get("force")),
+                        send_mail=None if sm is None else bool(sm),
+                        period=body.get("period")))
                 if p == "/api/daily/digest":
                     kind = body.get("kind") if body.get("kind") in ("news", "brief", "mil") else "news"
                     sm = body.get("send_mail")
@@ -373,7 +384,7 @@ def make_handler(inst: Instance):
                 col = collect_history_news(cfg, inst.db, inst.log, rng,
                                            inst.cfg.secret, max_items)
                 ana = inst.history.analyze(rng, col, horizon, force=bool(body.get("force")))
-                report = render_history(rng, col, ana.get("result") or {}, ana)
+                report = render_history(rng, col, ana.get("result") or {}, ana, prefix=mail_prefix(cfg))
                 report["signal_id"] = None
                 report["id"] = inst.db.insert_report(report)
                 delivery = None

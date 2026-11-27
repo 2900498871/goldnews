@@ -153,6 +153,42 @@ MIL_DIGEST_SYSTEM = """你是军事新闻编辑助理。下面是某一段时间
 3. 保持中立，只转述事实，不评价政治制度、不褒贬国家与军队。
 4. 全文 600–1000 字，直接输出正文，不要开场白和结尾客套。"""
 
+COMBINED_DAY_SYSTEM = """你是「黄金积存金助手」的编辑，读者是一位只做黄金积存（银行积存金定投与买卖）的个人投资者。
+材料是今天已经分别生成的三份日报 AI 总结：每日新闻、每日资讯、每日军事新闻。请把它们整合成**一封**给读者看的邮件正文（Markdown）。规则：
+1. 只依据材料归纳，不编造、不补充材料之外的信息；三份材料都没提到的不写。英文内容用中文转述。
+2. 结构固定：
+# 每日综合 · 日期（周几）
+## 今日要点
+- 3–5 条，跨三个板块挑出今天最值得知道的事，每条一句话；
+## 国内与国际要闻
+- 3–5 条，来自每日新闻；优先政策、经济数据、地缘与突发；
+## 财经资讯与市场
+- 3–5 条，来自每日资讯，说明对金价、美元、利率预期的含义；
+## 军事动态
+- 3–5 条，来自每日军事新闻；国内 1–2 条、国际 1–3 条；
+## 对黄金积存的参考
+- 2–4 条，只用条件化表述（「若……则……」），不给点位、不给仓位百分比、不下买卖指令；不确定时写「影响有限，按原计划执行」。
+3. 三个板块不重复同一条内容；同一事件只出现在最相关的一节。
+4. 全文 700–1100 字，直接输出正文，不要开场白和结尾客套。"""
+
+COMBINED_DIGEST_SYSTEM = """你是「黄金积存金助手」的编辑。材料是同一时间区间内三个板块的周期汇总文档：每日新闻、每日资讯、每日军事新闻。
+请整合成**一份**阶段综述邮件（Markdown）。规则：
+1. 只依据材料归纳，不编造、不补充材料之外的信息。
+2. 结构固定：
+# 每日综合汇总 · 区间
+## 阶段主线
+- 4–6 条，跨板块归纳这段时间的主线，尽量带出大致时间；
+## 新闻与政策
+- 3–5 条；
+## 财经与市场
+- 3–5 条，说明对金价与利率预期的影响；
+## 军事与地缘
+- 3–4 条，说明风险升温/降温及传导渠道；
+## 对积存节奏的启示
+- 2–3 条，只用条件化表述，不给点位与仓位，不下买卖指令。
+3. 三个板块不重复同一条内容。
+4. 全文 800–1200 字，直接输出正文，不要开场白和结尾客套。"""
+
 
 # --------------------------------------------------------------------------
 # 采集
@@ -1089,6 +1125,16 @@ def md_to_html(md: str) -> str:
     return "\n".join(out)
 
 
+def _strip_title(md: str) -> str:
+    """去掉 AI 自己加的 H1 标题，避免和程序拼的标题重复。"""
+    lines = (md or "").strip().splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines and re.match(r"^#\s+", lines[0]):
+        lines.pop(0)
+    return "\n".join(lines).strip()
+
+
 # --------------------------------------------------------------------------
 # 服务
 # --------------------------------------------------------------------------
@@ -1102,6 +1148,11 @@ class DailyService:
         # brief 的素材来自本端新闻采集：run_day('brief') 前先跑一次 kind=news 的采集
         self.collect_brief = collect_brief
         self.lock = threading.Lock()
+
+    def _mail_name(self) -> str:
+        """邮件主题前缀取「发件人显示名」，与设置页保持一致。"""
+        s = self.cfg.get().get("smtp") or {}
+        return str(s.get("from_name") or "").strip() or "黄金积存金助手"
 
     # ---------- 路径 ----------
     def doc_root(self) -> str:
@@ -1349,7 +1400,7 @@ class DailyService:
                     send_mail = bool(sec.get("send_mail"))
                 if send_mail:
                     delivery = self._send(
-                        kind, "【黄金积存金助手】%s · %s（%s）" % (KINDS[kind]["name"], day, _weekday(day)),
+                        kind, "【%s】%s · %s（%s）" % (self._mail_name(), KINDS[kind]["name"], day, _weekday(day)),
                         md, "daily_" + kind)
                 self.db.end_task(tid, "ok", status, started=started)
                 self.db.event("info", "%s 已生成：%s（%d 条，AI %s%s）" % (
@@ -1371,6 +1422,146 @@ class DailyService:
                 self.db.event("error", "%s 生成失败：%s" % (KINDS[kind]["name"], msg[:200]))
                 self.log.exception("daily run_day failed")
                 return {"ok": False, "message": msg, "source_status": status}
+
+    def run_all_day(self, trigger: str = "manual", force: bool = False,
+                    send_mail: bool | None = None) -> dict:
+        """三份日报依次生成，再合成一封「每日综合」邮件（设置页合并后的唯一入口）。"""
+        plan = self.cfg.get().get("daily_all") or {}
+        day = now_bj().strftime("%Y-%m-%d")
+        results = {}
+        for kind in ("news", "brief", "mil"):
+            results[kind] = self.run_day(kind, trigger=trigger, force=force, send_mail=False)
+        if send_mail is None:
+            send_mail = bool(plan.get("send_mail"))
+        combined = None
+        delivery = None
+        if send_mail:
+            combined = self.send_combined_day(day, force=force)
+            delivery = combined.get("delivery")
+        ok = any(r.get("ok") for r in results.values())
+        self.db.event("info" if ok else "error", "每日综合：三份文档 %s%s" % (
+            "已生成" if ok else "生成失败",
+            "，合并邮件已发送" if delivery and delivery.get("ok") else
+            ("，合并邮件发送失败：" + str(delivery.get("message", ""))[:100] if delivery else "")))
+        return {"ok": ok, "day": day, "results": results, "combined": combined, "delivery": delivery}
+
+    def due_periods_all(self, plan: dict, today: date | None = None) -> list[tuple[str, tuple]]:
+        """统一汇总周期：任意一个模块在该周期到期，就整封汇总一起做。"""
+        today = today or now_bj().date()
+        out = []
+        for per in digest_periods(plan):
+            rng = None
+            for kind in KINDS:
+                rng = self.due_range(kind, plan, today, per)
+                if rng:
+                    break
+            if rng:
+                out.append((per, rng))
+        return out
+
+    def send_combined_day(self, day: str | None = None, force: bool = False) -> dict:
+        """把当天三份日报的 AI 总结交给 AI 合成一封邮件，并留一份本地 Markdown。"""
+        day = day or now_bj().strftime("%Y-%m-%d")
+        pieces, missing = [], []
+        for kind in ("news", "brief", "mil"):
+            doc = self.db.one("SELECT * FROM daily_doc WHERE day=? AND kind=?", (day, kind))
+            name = KINDS[kind]["name"]
+            if not doc:
+                missing.append(name)
+                continue
+            s = (doc.get("summary_md") or "").strip()
+            if s:
+                pieces.append("【%s】\n%s" % (name, s))
+            else:
+                counts = _loads(doc.get("counts_json"))
+                brief_items = []
+                if kind == "news":
+                    brief_items = [r["title"] for r in self.db.daily_items(day, "news", None, 12)]
+                elif kind == "mil":
+                    brief_items = [r["title"] for r in self.db.daily_items(day, "mil", None, 12)]
+                else:
+                    brief_items = [r.get("title") or "" for r in self.db.news_of_day(day, 12)]
+                pieces.append("【%s】\nAI 总结未生成；当日条目 %s：\n%s" % (
+                    name, counts or "", "\n".join("- " + x for x in brief_items if x)))
+        if not pieces:
+            return {"ok": False, "message": "今天还没有任何每日文档，先生成一次再发信"}
+        user = "日期：%s（%s）\n\n%s\n\n%s" % (day, _weekday(day), "\n\n".join(pieces),
+                                              ("今日未生成：" + "、".join(missing)) if missing else "")
+        ai = self._summarize_or_none(COMBINED_DAY_SYSTEM, user, 2000, force)
+        title = "# 每日综合 · %s（%s）" % (day, _weekday(day))
+        if ai.get("available"):
+            body = _strip_title(ai.get("text") or "")
+        else:
+            body = ("## 今日要点\n- 合并综述未生成（%s）；以下为三份日报的 AI 总结摘录\n\n%s" %
+                    (ai.get("reason") or "未知原因", "\n\n".join(pieces)))
+        md = title + "\n\n" + body.strip() + "\n"
+        path = os.path.join(self.doc_root(), "每日综合", day[:7], day + ".md")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self._write(path, md)
+        subject = "【%s】每日综合 · %s（%s）" % (self._mail_name(), day, _weekday(day))
+        delivery = self._send_combined(subject, md, "daily_all")
+        self.db.event("info", "每日综合邮件：%s（AI %s）" % (
+            subject[:60], "完成" if ai.get("available") else "未生成"))
+        return {"ok": True, "path": path, "markdown": md,
+                "ai": {"available": bool(ai.get("available")), "reason": ai.get("reason") or ""},
+                "delivery": delivery}
+
+    def run_all_digest(self, trigger: str = "manual", force: bool = False,
+                       period: str | None = None, send_mail: bool | None = None) -> dict:
+        """统一周期汇总：三个模块各出一份汇总文档，再合成一封汇总邮件。"""
+        plan = self.cfg.get().get("daily_all") or {}
+        per = period or (digest_periods(plan) or [None])[0]
+        if not per:
+            return {"ok": False, "not_due": True, "message": "未勾选任何汇总周期，请先到设置页选择"}
+        results = {}
+        for kind in KINDS:
+            results[kind] = self.run_digest(kind, trigger=trigger, force=force,
+                                            send_mail=False, period=per)
+        good = [r for r in results.values() if r.get("ok") and (r.get("markdown") or "").strip()]
+        if not good:
+            reasons = [str(r.get("message") or "") for r in results.values() if r.get("message")]
+            return {"ok": False, "not_due": True, "period": per,
+                    "message": "；".join(reasons) or "区间内没有可汇总的每日文档"}
+        start, end = good[0]["start"], good[0]["end"]
+        label = _period_label(per, date.fromisoformat(start), date.fromisoformat(end))
+        pieces = ["【%s】\n%s" % (KINDS[k]["name"], (results[k].get("markdown") or "").strip())
+                  for k in KINDS if results[k].get("ok") and (results[k].get("markdown") or "").strip()]
+        user = "区间：%s\n\n%s" % (label, "\n\n".join(pieces))
+        ai = self._summarize_or_none(COMBINED_DIGEST_SYSTEM, user, 2400, force)
+        title = "# 每日综合汇总 · %s" % label
+        if ai.get("available"):
+            body = _strip_title(ai.get("text") or "")
+        else:
+            body = ("## 阶段主线\n- 合并综述未生成（%s）；以下为三个板块的汇总摘录\n\n%s" %
+                    (ai.get("reason") or "未知原因", "\n\n".join(pieces)))
+        md = title + "\n\n" + body.strip() + "\n"
+        path = os.path.join(self.doc_root(), "每日综合汇总", "%s至%s" % (start, end), per + ".md")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self._write(path, md)
+        if send_mail is None:
+            send_mail = bool(plan.get("digest_send_mail", True))
+        delivery = self._send_combined(
+            "【%s】每日综合汇总 · %s（AI 汇总）" % (self._mail_name(), label), md, "digest_all") if send_mail else None
+        self.db.event("info", "每日综合汇总：%s（%d 个模块%s）" % (
+            label, len(good), "，邮件已发送" if delivery and delivery.get("ok") else ""))
+        return {"ok": True, "period": per, "start": start, "end": end, "label": label,
+                "results": results, "path": path, "markdown": md,
+                "ai": {"available": bool(ai.get("available")), "reason": ai.get("reason") or ""},
+                "delivery": delivery}
+
+    def _send_combined(self, subject: str, md: str, report_type: str) -> dict:
+        html = ('<div style="font-family:-apple-system,\'Segoe UI\',\'Microsoft YaHei\',sans-serif;'
+                'font-size:14px;line-height:1.7;max-width:760px;color:#1F2430">%s'
+                '<hr style="border:none;border-top:1px solid #E3E6EC;margin:20px 0">'
+                '<p style="font-size:12px;color:#5B6472">%s</p></div>') % (
+            md_to_html(md), _html.escape(DISCLAIMER_MD.strip("*")))
+        report = {"report_date": now_bj().strftime("%Y-%m-%d"), "report_type": report_type,
+                  "subject": subject, "html": html, "text_body": md, "signal_id": None}
+        report["id"] = self.db.insert_report(report)
+        delivery = self.mailer.send_report(report)
+        self.db.audit("daily_mail", "每日综合邮件 %s：%s" % (
+            subject[:40], "已发送" if delivery.get("ok") else delivery.get("message", "失败")))
+        return delivery
 
     def _ai_day(self, kind: str, day: str, rows: list[dict], sec: dict, force: bool,
                 sig: dict | None = None) -> dict:
@@ -1636,7 +1827,7 @@ class DailyService:
             delivery = None
             if send_mail:
                 delivery = self._send(
-                    kind, "【黄金积存金助手】%s · %s（AI 汇总）" % (KINDS[kind]["name"], _period_label(per, start, end)),
+                    kind, "【%s】%s · %s（AI 汇总）" % (self._mail_name(), KINDS[kind]["name"], _period_label(per, start, end)),
                     md, "digest_" + kind)
             did = self.db.insert_digest({
                 "kind": kind, "period": per, "start_date": start.isoformat(), "end_date": end.isoformat(),
@@ -1762,11 +1953,13 @@ class DailyService:
         docs = self.db.daily_docs(kind, None, None, 60)
         digests = self.db.recent_digests(kind, 12)
         hm = now.strftime("%H:%M")
-        t = str(sec.get("time") or "")
+        plan = cfg.get("daily_all") or {}
+        enabled = plan.get("enabled") if plan else sec.get("enabled")
+        t = str(plan.get("time") or sec.get("time") or "")
         next_daily = ("今天 %s" % t) if (t and t > hm) else ("明天 %s" % t)
         try:
             root = self.doc_root()
-            next_digest = self.next_digest_text(kind, sec)
+            next_digest = self.next_digest_text(kind, plan or sec)
         except Exception as e:
             root, next_digest = "", "文档目录不可用：%s" % str(e)[:80]
         return {"ok": True, "kind": kind, "name": KINDS[kind]["name"], "config": sec,
@@ -1778,10 +1971,11 @@ class DailyService:
                 "docs": [{"day": d["day"], "path": d["path"], "ai_available": bool(d["ai_available"]),
                           "generated_at": d["generated_at"],
                           "counts": _loads(d.get("counts_json"))} for d in docs],
-                "digests": digests, "next_daily": next_daily if sec.get("enabled") else "已关闭",
-                "next_digest": next_digest if sec.get("enabled") else "已关闭",
-                "digest_due": bool(sec.get("enabled") and self.due_periods(kind, sec)),
-                "digest_periods": digest_periods(sec)}
+                "digests": digests, "next_daily": next_daily if enabled else "已关闭",
+                "next_digest": next_digest if enabled else "已关闭",
+                "digest_due": bool(enabled and any(self.due_range(k, plan or sec, None, p)
+                                                  for k in KINDS for p in digest_periods(plan or sec))),
+                "digest_periods": digest_periods(plan or sec)}
 
     def read_doc(self, kind: str, path: str) -> dict:
         """读取文档正文；只允许读文档目录之内的文件。"""

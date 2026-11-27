@@ -9,7 +9,7 @@ from .ai import Analyzer
 from .news import NewsCollector
 from .notifier import Mailer
 from .prices import PriceCollector
-from .renderer import render_daily, render_flash
+from .renderer import render_daily, render_flash, mail_prefix
 from .util import OZ_TO_GRAM, iso_bj, log_line, now_bj, redact
 
 
@@ -111,9 +111,10 @@ class Pipeline:
                 if kind in ("flash", "daily_summary", "full"):
                     rtype = "daily_summary" if kind == "daily_summary" else "flash"
                     if rtype == "daily_summary":
-                        report = render_daily(snapshot, news, ai_result or {}, self._signal_review())
+                        report = render_daily(snapshot, news, ai_result or {}, self._signal_review(),
+                                              prefix=mail_prefix(cfg))
                     else:
-                        report = render_flash(snapshot, news, ai_result or {})
+                        report = render_flash(snapshot, news, ai_result or {}, prefix=mail_prefix(cfg))
                     report["signal_id"] = None
                     report["id"] = self.db.insert_report(report)
                 if send_mail is None:

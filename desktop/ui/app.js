@@ -681,10 +681,8 @@
       $('asState').textContent = !as.supported ? '不支持' : (as.enabled ? (as.stale ? '已开启 · 路径待更新' : '已开启') : '未开启');
       $('asPath').textContent = as.command || (as.frozen ? '当前为打包版，可直接开启' : '当前为源码运行，将注册 pythonw + run.py');
       $('asTip').textContent = as.message || '开关只写入 / 删除当前 Windows 用户的启动项（注册表 Run，不需要管理员权限），随时可以在这里关掉。';
-      // 每日新闻 / 每日资讯 / 每日军事新闻
-      loadDailyCfg(C.daily || {}, 'f_dn', 'news');
-      loadDailyCfg(C.brief || {}, 'f_bf', 'brief');
-      loadDailyCfg(C.mil || {}, 'f_mn', 'mil');
+      // 每日内容：一套时间与汇总周期（daily_all），三个模块只保留采集范围
+      loadDailyAll(C.daily_all || {}, C.daily || {}, C.brief || {}, C.mil || {});
       $('f_doc_dir').value = C.doc_dir || '';
     });
   }
@@ -1073,56 +1071,73 @@
                   'mil_reuters', 'mil_ap',
                   'weibo', 'baidu', 'douyin', 'bilibili', 'zhihu'];
 
-  function loadDailyCfg(sec, p, kind) {
-    setSw(p + '_enabled', sec.enabled !== false);
-    $(p + '_time').value = sec.time || '20:30';
-    setSw(p + '_ai', sec.ai_enabled !== false);
-    setSw(p + '_mail', !!sec.send_mail);
-    setPeriods(p, periodsOf(sec));
-    $(p + '_custom').value = sec.digest_custom_days || 15;
-    $(p + '_dtime').value = sec.digest_time || '21:30';
-    setSw(p + '_dmail', sec.digest_send_mail !== false);
-    if (kind === 'news') {
-      setSw('f_dn_cctv', sec.cctv_enabled !== false); $('f_dn_cctv_max').value = sec.cctv_max_items || 20;
-      setSw('f_dn_hot', sec.hot_enabled !== false); $('f_dn_hot_max').value = sec.hot_max_items || 10;
-      var hs = sec.hot_sources || {};
-      ['weibo', 'baidu', 'douyin', 'bilibili', 'zhihu'].forEach(function (k) {
-        $('f_dn_hs_' + k).checked = hs[k] !== false; });
-    } else if (kind === 'mil') {
-      $('f_mn_max').value = sec.max_items || 30;
-    } else {
-      $('f_bf_max').value = sec.max_items || 40;
-    }
+  function loadDailyAll(plan, daily, brief, mil) {
+    /* 统一设置：时间 / AI / 合并邮件 / 汇总周期 / 汇总时间 */
+    setSw('f_da_enabled', plan.enabled !== false);
+    $('f_da_time').value = plan.time || '20:30';
+    setSw('f_da_ai', plan.ai_enabled !== false);
+    setSw('f_da_mail', !!plan.send_mail);
+    setPeriods('f_da', periodsOf(plan));
+    $('f_da_custom').value = plan.digest_custom_days || 15;
+    $('f_da_dtime').value = plan.digest_time || '21:30';
+    setSw('f_da_dmail', plan.digest_send_mail !== false);
+    /* 各模块只保留采集范围 */
+    setSw('f_dn_cctv', daily.cctv_enabled !== false); $('f_dn_cctv_max').value = daily.cctv_max_items || 20;
+    setSw('f_dn_hot', daily.hot_enabled !== false); $('f_dn_hot_max').value = daily.hot_max_items || 10;
+    var hs = daily.hot_sources || {};
+    ['weibo', 'baidu', 'douyin', 'bilibili', 'zhihu'].forEach(function (k) {
+      $('f_dn_hs_' + k).checked = hs[k] !== false; });
+    $('f_bf_max').value = brief.max_items || 40;
+    $('f_mn_max').value = mil.max_items || 60;
   }
-  function saveDailySettings(kind) {
-    var p = kind === 'news' ? 'f_dn' : (kind === 'mil' ? 'f_mn' : 'f_bf');
-    var sec = { enabled: isOn(p + '_enabled'), time: $(p + '_time').value.trim(),
-                ai_enabled: isOn(p + '_ai'), send_mail: isOn(p + '_mail'),
-                digest_periods: getPeriods(p),
-                digest_custom_days: parseInt($(p + '_custom').value, 10) || 15,
-                digest_time: $(p + '_dtime').value.trim(), digest_send_mail: isOn(p + '_dmail') };
-    if (kind === 'news') {
-      sec.cctv_enabled = isOn('f_dn_cctv'); sec.cctv_max_items = parseInt($('f_dn_cctv_max').value, 10) || 20;
-      sec.hot_enabled = isOn('f_dn_hot'); sec.hot_max_items = parseInt($('f_dn_hot_max').value, 10) || 10;
-      sec.hot_sources = { weibo: $('f_dn_hs_weibo').checked, baidu: $('f_dn_hs_baidu').checked,
-                          douyin: $('f_dn_hs_douyin').checked, bilibili: $('f_dn_hs_bilibili').checked,
-                          zhihu: $('f_dn_hs_zhihu').checked };
-    } else if (kind === 'mil') {
-      sec.max_items = parseInt($('f_mn_max').value, 10) || 30;
-    } else {
-      sec.max_items = parseInt($('f_bf_max').value, 10) || 40;
-    }
-    /* 配置段名与页签 kind 并不同名：每日新闻写 daily，资讯写 brief，军事写 mil */
-    var SECT = { news: 'daily', brief: 'brief', mil: 'mil' };
-    var config = {}; config[SECT[kind] || kind] = sec;
-    if (kind === 'news') config.doc_dir = $('f_doc_dir').value.trim();
-    return api('/api/config', 'POST', { config: config, summary: DLK[kind] + '设置保存' }).then(function (r) {
+  window.loadDailyAll = loadDailyAll;
+
+  function saveDailyAll() {
+    var all = { enabled: isOn('f_da_enabled'), time: $('f_da_time').value.trim(),
+                ai_enabled: isOn('f_da_ai'), send_mail: isOn('f_da_mail'),
+                digest_periods: getPeriods('f_da'),
+                digest_custom_days: parseInt($('f_da_custom').value, 10) || 15,
+                digest_time: $('f_da_dtime').value.trim(),
+                digest_send_mail: isOn('f_da_dmail') };
+    var config = {
+      daily_all: all,
+      /* 三个模块不再单独发信：邮件统一由 daily_all 合并发送 */
+      daily: { cctv_enabled: isOn('f_dn_cctv'), cctv_max_items: parseInt($('f_dn_cctv_max').value, 10) || 20,
+               hot_enabled: isOn('f_dn_hot'), hot_max_items: parseInt($('f_dn_hot_max').value, 10) || 10,
+               hot_sources: { weibo: $('f_dn_hs_weibo').checked, baidu: $('f_dn_hs_baidu').checked,
+                              douyin: $('f_dn_hs_douyin').checked, bilibili: $('f_dn_hs_bilibili').checked,
+                              zhihu: $('f_dn_hs_zhihu').checked },
+               send_mail: false, digest_send_mail: false },
+      brief: { max_items: parseInt($('f_bf_max').value, 10) || 40, send_mail: false, digest_send_mail: false },
+      mil: { max_items: parseInt($('f_mn_max').value, 10) || 60, send_mail: false, digest_send_mail: false },
+      doc_dir: $('f_doc_dir').value.trim()
+    };
+    return api('/api/config', 'POST', { config: config, summary: '每日内容设置保存' }).then(function (r) {
       if (!ok(r)) { toast('保存失败：' + ((r.data || {}).message || '未知错误')); return false; }
-      toast(DLK[kind] + '设置已保存（v' + r.data.config_version + '），调度器即时生效');
+      toast('每日内容设置已保存（v' + r.data.config_version + '），调度器即时生效');
       loadConfig(); loadState(); return true;
     });
   }
-  window.saveDailySettings = saveDailySettings;
+  window.saveDailyAll = saveDailyAll;
+
+  function runDailyAll() {
+    var sm = isOn('f_da_mail');
+    if (!confirm('将依次采集新闻、资讯、军事三份内容（约 1–3 分钟），' +
+                 (sm ? '完成后 AI 合成一封邮件发出' : '不发邮件') + '。继续？')) return;
+    toast('开始生成三份每日内容…');
+    api('/api/daily/run_all', 'POST', { send_mail: sm }).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast('生成失败：' + (d.message || '未知错误')); return; }
+      var part = ['新闻', '资讯', '军事'].filter(function (k) {
+        return (d.results || {})[k] && d.results[k].ok;
+      }).length;
+      var mail = (d.combined || {}).delivery || d.delivery || {};
+      toast('完成：' + part + '/3 份文档已生成' +
+            (d.combined ? ('；合并邮件' + (mail.ok ? '已发送' : ('失败：' + (mail.message || ''))) ) : ''));
+      loadState(); loadDaily(); loadConfig();
+    });
+  }
+  window.runDailyAll = runDailyAll;
   function toggleAutostart(el) {
     var v = el.className.indexOf('on') < 0;
     api('/api/autostart', 'POST', { enabled: v }).then(function (r) {

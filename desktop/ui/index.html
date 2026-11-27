@@ -321,12 +321,34 @@
           <div class="hint mt">时点可增删改、改类型、启停、清空；保存后本端调度器即时热重载。</div>
         </div>
 
-        <div class="card mt"><div class="ch"><h3>每日新闻</h3><span class="sub">央视新闻 + 互联网热搜 → AI 总结 → 每日本地文档 → 周期汇总发邮箱</span></div>
+        <div class="card mt"><div class="ch"><h3>每日内容（新闻 · 资讯 · 军事）</h3><span class="sub">一套时间与汇总周期 → 三份本地文档 → AI 合成一封邮件</span></div>
           <div class="form gridform">
-            <label>启用每日新闻 <button class="sw on" id="f_dn_enabled" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>每日采集与 AI 总结时间</label><input id="f_dn_time" type="time" value="20:30">
+            <label>启用每日内容 <button class="sw on" id="f_da_enabled" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>每日生成时间</label><input id="f_da_time" type="time" value="20:30">
+            <label>文档开头的 AI 总结 <button class="sw on" id="f_da_ai" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>发送合并邮件 <button class="sw" id="f_da_mail" onclick="tog(this)"><i></i></button></label><div></div>
+          </div>
+          <div class="hint mt">到点后依次生成「每日新闻 → 每日资讯 → 每日军事新闻」三份文档（页签与本地文件都照旧保留），再把三份 AI 总结交给 AI 合成一封邮件发出，不再一天发三封。</div>
+          <div class="ch mt"><h3>周期汇总</h3><span class="sub">三个模块各出汇总文档 → AI 合成一封汇总邮件</span></div>
+          <div class="form gridform">
+            <label>汇总周期（可多选）</label>
+            <div class="inline sws">
+              <label class="chk"><input type="checkbox" value="1d" name="da_per"> 每天</label>
+              <label class="chk"><input type="checkbox" value="1w" name="da_per"> 每周</label>
+              <label class="chk"><input type="checkbox" value="1m" name="da_per"> 每月</label>
+              <label class="chk"><input type="checkbox" value="6m" name="da_per"> 每半年</label>
+              <label class="chk"><input type="checkbox" value="1y" name="da_per"> 每年</label>
+              <label class="chk"><input type="checkbox" value="custom" name="da_per"> 自定义</label>
+            </div>
+            <label>自定义间隔天数</label><input id="f_da_custom" type="number" value="15" min="1" max="3650">
+            <label>汇总生成时间</label><input id="f_da_dtime" type="time" value="21:30">
+            <label>汇总发送到邮箱 <button class="sw on" id="f_da_dmail" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>文档保存目录</label><input id="f_doc_dir" placeholder="留空 = 数据目录（每日新闻 / 每日资讯 / 每日军事新闻 / 每日综合）">
+          </div>
+          <div class="ch mt"><h3>各模块采集范围</h3><span class="sub">只影响三个页签与本地文档，不影响上面的时间与邮件</span></div>
+          <div class="form gridform">
             <label>采集央视新闻 <button class="sw on" id="f_dn_cctv" onclick="tog(this)"><i></i></button></label>
-            <div class="inline">每个栏目最多 <input id="f_dn_cctv_max" type="number" value="20" min="5" max="100" class="mini"> 条（要闻 / 国内 / 国际 / 社会 / 科技）</div>
+            <div class="inline">每个栏目最多 <input id="f_dn_cctv_max" type="number" value="20" min="5" max="100" class="mini"> 条</div>
             <label>采集互联网热搜 <button class="sw on" id="f_dn_hot" onclick="tog(this)"><i></i></button></label>
             <div class="inline">每个平台取前 <input id="f_dn_hot_max" type="number" value="10" min="5" max="50" class="mini"> 条</div>
             <label>热搜平台</label>
@@ -337,78 +359,15 @@
               <label class="chk"><input type="checkbox" id="f_dn_hs_bilibili"> B站</label>
               <label class="chk"><input type="checkbox" id="f_dn_hs_zhihu"> 知乎</label>
             </div>
-            <label>文档开头的 AI 总结 <button class="sw on" id="f_dn_ai" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>每日总结发送到邮箱 <button class="sw" id="f_dn_mail" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>每日资讯当日要闻最多条数</label><input id="f_bf_max" type="number" value="40" min="5" max="200">
+            <label>每日军事新闻最多条数</label><input id="f_mn_max" type="number" value="60" min="5" max="200">
           </div>
-          <div class="ch mt"><h3>周期汇总</h3><span class="sub">AI 汇总区间内各日总结 → 汇总文档 → 邮箱</span></div>
-          <div class="form gridform">
-            <label>汇总周期（可多选）</label>
-            <div class="inline sws">
-              <label class="chk"><input type="checkbox" value="1d" name="dn_per"> 每天</label>
-              <label class="chk"><input type="checkbox" value="1w" name="dn_per"> 每周</label>
-              <label class="chk"><input type="checkbox" value="1m" name="dn_per"> 每月</label>
-              <label class="chk"><input type="checkbox" value="6m" name="dn_per"> 每半年</label>
-              <label class="chk"><input type="checkbox" value="1y" name="dn_per"> 每年</label>
-              <label class="chk"><input type="checkbox" value="custom" name="dn_per"> 自定义</label>
-            </div>
-            <label>自定义间隔天数</label><input id="f_dn_custom" type="number" value="15" min="1" max="3650">
-            <label>汇总生成时间</label><input id="f_dn_dtime" type="time" value="21:30">
-            <label>汇总发送到邮箱 <button class="sw on" id="f_dn_dmail" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>文档保存目录</label><input id="f_doc_dir" placeholder="留空 = 数据目录（data\每日新闻、data\每日资讯）">
-          </div>
-          <div class="btnrow"><button class="btn pri" onclick="saveDailySettings('news')">保存每日新闻设置</button>
-            <button class="btn" onclick="go('daily')">打开每日新闻</button></div>
-          <div class="hint mt">每天到点后自动采集并生成一份 Markdown 文档（AI 总结 + 央视各栏目 + 各平台热搜）。汇总周期可多选，每个周期各出一份汇总文档：每周 = 上一个自然周（周一至周日），周一到期；每月 = 上一个自然月；电脑当时关机的话，下次开机到点会自动补做。发送邮箱需先在上方启用 SMTP。</div>
-        </div>
-
-        <div class="card mt"><div class="ch"><h3>每日资讯</h3><span class="sub">「资讯与 AI 研判」页当日要闻 + 当日研判 → 每日本地文档 → 周期汇总发邮箱</span></div>
-          <div class="form gridform">
-            <label>启用每日资讯 <button class="sw on" id="f_bf_enabled" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>每日生成时间</label><input id="f_bf_time" type="time" value="21:10">
-            <label>当日要闻最多条数</label><input id="f_bf_max" type="number" value="40" min="5" max="200">
-            <label>文档开头的 AI 总结 <button class="sw on" id="f_bf_ai" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>每日总结发送到邮箱 <button class="sw" id="f_bf_mail" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>汇总周期（可多选）</label>
-            <div class="inline sws">
-              <label class="chk"><input type="checkbox" value="1d" name="bf_per"> 每天</label>
-              <label class="chk"><input type="checkbox" value="1w" name="bf_per"> 每周</label>
-              <label class="chk"><input type="checkbox" value="1m" name="bf_per"> 每月</label>
-              <label class="chk"><input type="checkbox" value="6m" name="bf_per"> 每半年</label>
-              <label class="chk"><input type="checkbox" value="1y" name="bf_per"> 每年</label>
-              <label class="chk"><input type="checkbox" value="custom" name="bf_per"> 自定义</label>
-            </div>
-            <label>自定义间隔天数</label><input id="f_bf_custom" type="number" value="15" min="1" max="3650">
-            <label>汇总生成时间</label><input id="f_bf_dtime" type="time" value="21:30">
-            <label>汇总发送到邮箱 <button class="sw on" id="f_bf_dmail" onclick="tog(this)"><i></i></button></label><div></div>
-          </div>
-          <div class="btnrow"><button class="btn pri" onclick="saveDailySettings('brief')">保存每日资讯设置</button>
-            <button class="btn" onclick="go('daily')">打开每日资讯</button></div>
-          <div class="hint mt">文档目录与「每日新闻」共用。汇总时间建议晚于生成时间，这样当天文档也会计入汇总。</div>
-        </div>
-
-        <div class="card mt"><div class="ch"><h3>每日军事新闻</h3><span class="sub">中国军网 / 人民网军事（国内）+ 央视国际军事（国际）→ AI 总结（含与黄金积存买卖的关系）→ 每日本地文档 → 周期汇总发邮箱</span></div>
-          <div class="form gridform">
-            <label>启用每日军事新闻 <button class="sw on" id="f_mn_enabled" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>每日采集与 AI 总结时间</label><input id="f_mn_time" type="time" value="19:40">
-            <label>每日最多条数</label><input id="f_mn_max" type="number" value="60" min="5" max="200">
-            <label>文档开头的 AI 总结 <button class="sw on" id="f_mn_ai" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>每日总结发送到邮箱 <button class="sw" id="f_mn_mail" onclick="tog(this)"><i></i></button></label><div></div>
-            <label>汇总周期（可多选）</label>
-            <div class="inline sws">
-              <label class="chk"><input type="checkbox" value="1d" name="mn_per"> 每天</label>
-              <label class="chk"><input type="checkbox" value="1w" name="mn_per"> 每周</label>
-              <label class="chk"><input type="checkbox" value="1m" name="mn_per"> 每月</label>
-              <label class="chk"><input type="checkbox" value="6m" name="mn_per"> 每半年</label>
-              <label class="chk"><input type="checkbox" value="1y" name="mn_per"> 每年</label>
-              <label class="chk"><input type="checkbox" value="custom" name="mn_per"> 自定义</label>
-            </div>
-            <label>自定义间隔天数</label><input id="f_mn_custom" type="number" value="15" min="1" max="3650">
-            <label>汇总生成时间</label><input id="f_mn_dtime" type="time" value="21:35">
-            <label>汇总发送到邮箱 <button class="sw on" id="f_mn_dmail" onclick="tog(this)"><i></i></button></label><div></div>
-          </div>
-          <div class="btnrow"><button class="btn pri" onclick="saveDailySettings('mil')">保存每日军事新闻设置</button>
-            <button class="btn" onclick="go('daily');setDailyKind('mil')">打开每日军事新闻</button></div>
-          <div class="hint mt">采集国内军事（中国军网要闻、人民网军事）与国际军事（央视国际里按军事、地缘关键词筛），AI 除归纳要闻外，还单列「地缘风险与黄金」和「对黄金积存买卖的参考」（只给条件化判断，不给点位与仓位）。</div>
+          <div class="btnrow"><button class="btn pri" onclick="saveDailyAll()">保存每日内容设置</button>
+            <button class="btn" onclick="runDailyAll()">立即生成三份并合并发信</button>
+            <button class="btn" onclick="go('daily')">打开每日新闻</button>
+            <button class="btn" onclick="go('daily');setDailyKind('brief')">打开每日资讯</button>
+            <button class="btn" onclick="go('daily');setDailyKind('mil')">打开军事新闻</button></div>
+          <div class="hint mt">汇总周期可多选：每周 = 上一个自然周（周一至周日），周一到期；每月 = 上一个自然月；电脑当时关机，下次开机到点会自动补做。汇总时间建议晚于生成时间，这样当天文档也会计入汇总。发送邮件需先在上方启用 SMTP。</div>
         </div>
 
         <div class="card mt"><div class="ch"><h3>一键自检</h3><button class="btn sm" onclick="runSelfcheck('settings')">运行</button></div>

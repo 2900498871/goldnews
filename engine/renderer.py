@@ -238,8 +238,14 @@ def _quality_html(q: list[str]) -> str:
             '<b>数据质量提示：</b><br>' + "<br>".join(_e(x) for x in q) + "</div>")
 
 
-def render_flash(snapshot: dict, news: dict, ai_result: dict) -> dict:
-    subject = "【黄金积存金】快报 · %s" % bj_str(now_bj(), "%Y-%m-%d %H:%M")
+def mail_prefix(cfg: dict, default: str = "黄金积存金") -> str:
+    """邮件主题前缀：优先用设置页的发件人显示名，保持与发件人一致。"""
+    s = (cfg or {}).get("smtp") or {}
+    return str(s.get("from_name") or "").strip() or default
+
+
+def render_flash(snapshot: dict, news: dict, ai_result: dict, prefix: str = "黄金积存金") -> dict:
+    subject = "【%s】快报 · %s" % (prefix, bj_str(now_bj(), "%Y-%m-%d %H:%M"))
     sig = (ai_result or {}).get("signal") or {}
     q = _quality_text(snapshot, news, ai_result)
     body = (
@@ -265,7 +271,8 @@ def render_flash(snapshot: dict, news: dict, ai_result: dict) -> dict:
             "generated_at": bj_str(now_bj())}
 
 
-def render_history(rng: dict, collection: dict, result: dict, analysis: dict | None = None) -> dict:
+def render_history(rng: dict, collection: dict, result: dict, analysis: dict | None = None,
+                   prefix: str = "黄金积存金") -> dict:
     """FR-16：时段新闻回顾 + 未来情景研判报告（HTML + 纯文本，固定免责声明）。"""
     from .history import HORIZONS, TOPIC_LABEL, STANCE_LABEL, PRESET_LABEL  # 避免顶层循环依赖
     cn_dir = {"bullish": "偏多倾向", "bearish": "偏空倾向", "neutral": "中性",
@@ -275,7 +282,7 @@ def render_history(rng: dict, collection: dict, result: dict, analysis: dict | N
     period = "%s ~ %s（%s，共 %d 天）" % (rng["start"], rng["end"],
                                          PRESET_LABEL.get(rng["preset"], rng["preset"]), rng["days"])
     horizon = HORIZONS.get(r.get("forward_horizon"), "未来 1–3 个月")
-    subject = "【黄金积存金】时段新闻情景研判 · %s ~ %s" % (rng["start"], rng["end"])
+    subject = "【%s】时段新闻情景研判 · %s ~ %s" % (prefix, rng["start"], rng["end"])
 
     topics_html = "".join(
         "<li>%s：<b>%d</b> 条</li>" % (_e(t.get("label") or TOPIC_LABEL.get(t.get("topic"), t.get("topic"))),
@@ -372,8 +379,9 @@ def render_history(rng: dict, collection: dict, result: dict, analysis: dict | N
             "generated_at": bj_str(now_bj())}
 
 
-def render_daily(snapshot: dict, news: dict, ai_result: dict, signal_review: str = "") -> dict:
-    subject = "【黄金积存金】每日总结 · %s" % bj_str(now_bj(), "%Y-%m-%d")
+def render_daily(snapshot: dict, news: dict, ai_result: dict, signal_review: str = "",
+                 prefix: str = "黄金积存金") -> dict:
+    subject = "【%s】每日总结 · %s" % (prefix, bj_str(now_bj(), "%Y-%m-%d"))
     sig = (ai_result or {}).get("signal") or {}
     q = _quality_text(snapshot, news, ai_result)
     prices = price_rows(snapshot)

@@ -177,17 +177,27 @@ class Scheduler:
         if not self.daily:
             return
         pending = []
-        for kind in ("news", "brief", "mil"):
-            sec = cfg.get(SECTION.get(kind, kind)) or {}
-            if not sec.get("enabled"):
-                continue
-            if self._due_today("daily|%s|%s" % (kind, today), sec.get("time"), now):
-                pending.append(("day", kind))
-            # 汇总按周期逐个判断：先确认「该周期确有到期区间」再占用当日时点，避免每天留一条「未到期」记录
-            for per in digest_periods(sec):
-                if self.daily.due_range(kind, sec, now.date(), per) and \
-                        self._due_today("digest|%s|%s|%s" % (kind, per, today), sec.get("digest_time"), now):
-                    pending.append(("digest", kind, per))
+        plan = cfg.get("daily_all") or {}
+        if plan.get("enabled"):
+            if self._due_today("daily|all|%s" % today, plan.get("time"), now):
+                pending.append(("day_all",))
+            # 统一汇总：三个模块共用一套周期与时间；任意一个模块到期就整封汇总一起做
+            due = {p for p, _ in self.daily.due_periods_all(plan, now.date())}
+            for per in digest_periods(plan):
+                if per in due and self._due_today("digest|all|%s|%s" % (per, today), plan.get("digest_time"), now):
+                    pending.append(("digest_all", per))
+        else:
+            # 兼容：老配置里 daily_all 被关掉时，退回三个模块各自调度（不再发合并邮件）
+            for kind in ("news", "brief", "mil"):
+                sec = cfg.get(SECTION.get(kind, kind)) or {}
+                if not sec.get("enabled"):
+                    continue
+                if self._due_today("daily|%s|%s" % (kind, today), sec.get("time"), now):
+                    pending.append(("day", kind))
+                for per in digest_periods(sec):
+                    if self.daily.due_range(kind, sec, now.date(), per) and \
+                            self._due_today("digest|%s|%s|%s" % (kind, per, today), sec.get("digest_time"), now):
+                        pending.append(("digest", kind, per))
         if not pending:
             return
         if self.daily_thread and self.daily_thread.is_alive():
@@ -197,7 +207,14 @@ class Scheduler:
         def work():
             for job in pending:
                 try:
-                    if job[0] == "day":
+                    if job[0] == "day_all":
+                        self.daily.run_all_day(trigger="scheduled")
+                    elif job[0] == "digest_all":
+                        r = self.daily.run_all_digest(trigger="scheduled", period=job[1])
+                        if r.get("not_due"):
+                            self.db.event("info", "每日综合的%s汇总未到期，本次不生成" % (
+                                DIGEST_PERIOD_CN.get(job[1], job[1])))
+                    elif job[0] == "day":
                         self.daily.run_day(job[1], trigger="scheduled")
                     else:
                         _, kind, per = job
@@ -207,7 +224,7 @@ class Scheduler:
                                 {"news": "每日新闻", "brief": "每日资讯", "mil": "每日军事新闻"}.get(kind, kind),
                                 DIGEST_PERIOD_CN.get(per, per)))
                 except Exception as e:
-                    self.db.event("error", "每日文档任务异常（%s）：%s" % ("/".join(job), str(e)[:160]))
+                    self.db.event("error", "每日文档任务异常（%s）：%s" % ("/".join(str(x) for x in job), str(e)[:160]))
 
         self.daily_thread = threading.Thread(target=work, name="golddesk-daily", daemon=True)
         self.daily_thread.start()

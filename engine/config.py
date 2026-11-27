@@ -156,6 +156,8 @@ def _build_default_config() -> dict:
         "brief": dict(_digest_defaults("21:10"), max_items=40),
         # 每日军事新闻：中国军网 / 人民网军事（国内）+ 央视国际军事（国际）→ 每日文档 → 周期汇总邮件
         "mil": dict(_digest_defaults("19:40"), max_items=60),
+        # 每日综合：三个模块共用一套时间与汇总周期，到点依次生成三份文档，再合成一封邮件
+        "daily_all": dict(_digest_defaults("20:30")),
     }
 
 
@@ -310,6 +312,9 @@ def _validate(cfg: dict):
                 raise ConfigError("%s的 %s 必须为 %d–%d 的整数" % (name, field, lo, hi))
         if not isinstance(sec.get("hot_sources", {}), dict):
             raise ConfigError("热搜平台开关配置必须是键值对")
+    all_sec = cfg.get("daily_all")
+    if all_sec is not None:
+        _validate_digest_section("每日综合", all_sec)
 
 
 class ConfigStore:
@@ -340,6 +345,7 @@ class ConfigStore:
         if self.cfg.get("app_kind") != self.app_kind:
             self.cfg["app_kind"] = self.app_kind
             changed = True
+        had_all = "daily_all" in self.cfg
         for k, v in base.items():
             if k not in self.cfg:
                 self.cfg[k] = v
@@ -403,6 +409,35 @@ class ConfigStore:
             changed = True
         if int(hist.get("total_deadline_seconds") or 0) < 20:
             hist["total_deadline_seconds"] = 22
+            changed = True
+        # 首次引入「每日综合」：沿用每日新闻原有时间与汇总周期，并把三个模块各自的发信关掉，
+        # 避免旧配置继续一天发三封（合并邮件由 daily_all 统一控制）。
+        if not had_all:
+            daily = self.cfg.get("daily") or {}
+            olds = [self.cfg.get(k) or {} for k in ("daily", "brief", "mil")]
+            all_sec = self.cfg.get("daily_all") or {}
+            all_sec["time"] = daily.get("time") or all_sec.get("time") or "20:30"
+            all_sec["ai_enabled"] = daily.get("ai_enabled", True)
+            # 任一旧模块原来开过发信，就保留合并发信，避免升级后突然收不到邮件
+            all_sec["send_mail"] = any(bool(s.get("send_mail")) for s in olds)
+            merged = []
+            for s in olds:
+                for per in digest_periods(s):
+                    if per not in merged:
+                        merged.append(per)
+            # 合并日报本身每天一封，再把「每天」汇总也开着会同一天发两封，默认去掉
+            if all_sec["send_mail"]:
+                merged = [p for p in merged if p != "1d"] or [p for p in digest_periods(daily) if p != "1d"] or ["1m"]
+            all_sec["digest_periods"] = merged or digest_periods(daily)
+            all_sec["digest_custom_days"] = daily.get("digest_custom_days") or 15
+            all_sec["digest_time"] = daily.get("digest_time") or "21:30"
+            all_sec["digest_send_mail"] = any(bool(s.get("digest_send_mail")) for s in olds)
+            self.cfg["daily_all"] = all_sec
+            for k in ("daily", "brief", "mil"):
+                sec = self.cfg.get(k)
+                if isinstance(sec, dict):
+                    sec["send_mail"] = False
+                    sec["digest_send_mail"] = False
             changed = True
         if changed:
             self._write(self.cfg)
