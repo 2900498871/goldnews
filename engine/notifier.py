@@ -61,7 +61,7 @@ class Mailer:
     def _message(self, subject: str, text_body: str, html_body: str, s: dict) -> EmailMessage:
         m = EmailMessage()
         m["Subject"] = subject
-        m["From"] = formataddr((s.get("from_name") or "黄金积存金助手", s.get("user") or ""))
+        m["From"] = formataddr((s.get("from_name") or "日常小助手", s.get("user") or ""))
         to = [x for x in (s.get("to") or []) if x]
         cc = [x for x in (s.get("cc") or []) if x]
         if not to:
@@ -77,7 +77,7 @@ class Mailer:
 
     def send_test_mail(self, override: dict | None = None) -> dict:
         s = self._settings(override)
-        subject = "【%s】测试邮件 · %s" % (s.get("from_name") or "黄金积存金助手",
+        subject = "【%s】测试邮件 · %s" % (s.get("from_name") or "日常小助手",
                                           bj_str(now_bj(), "%Y-%m-%d %H:%M"))
         text = ("这是一封配置测试邮件，不是业务快报，不含任何行情数值或投资判断。\n"
                 "发送端：%s 独立实例 %s\n时间（北京）：%s\n\n%s" %

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import timedelta
 
 from .util import iso_bj, now_bj, short_hash
+
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS instance_meta (
@@ -83,6 +86,8 @@ CREATE TABLE IF NOT EXISTS daily_doc (
   day TEXT, kind TEXT, path TEXT, ai_available INTEGER, ai_reason TEXT, summary_md TEXT,
   counts_json TEXT, generated_at TEXT, PRIMARY KEY(day, kind)
 );
+CREATE INDEX IF NOT EXISTS idx_daily_doc_day ON daily_doc(kind, day);
+CREATE INDEX IF NOT EXISTS idx_daily_item_title ON daily_item(kind, day, title);
 CREATE TABLE IF NOT EXISTS article_cache (
   key TEXT PRIMARY KEY, url TEXT, title TEXT, content TEXT, chars INTEGER, status TEXT, fetched_at TEXT
 );
@@ -99,15 +104,37 @@ class DB:
         self.path = os.path.abspath(path)
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         self.instance_id = instance_id
+        old_version = self._user_version()
+        if os.path.isfile(self.path) and old_version < SCHEMA_VERSION:
+            # 结构升级前留一份原库，迁移失败可直接回退
+            bak = "%s.pre-v%d.bak" % (self.path, old_version or 0)
+            if not os.path.exists(bak):
+                try:
+                    shutil.copy2(self.path, bak)
+                except OSError:
+                    pass
         with self.conn() as c:
             c.executescript(SCHEMA)
-            self._migrate(c)
+            self._migrate(c, old_version)
+            c.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
             c.execute("INSERT OR REPLACE INTO instance_meta VALUES(?,?,?)",
                       ("instance_id", instance_id, iso_bj()))
             c.commit()
 
+    def _user_version(self) -> int:
+        if not os.path.isfile(self.path):
+            return 0
+        try:
+            con = sqlite3.connect(self.path)
+            try:
+                return int(con.execute("PRAGMA user_version").fetchone()[0] or 0)
+            finally:
+                con.close()
+        except sqlite3.Error:
+            return 0
+
     @staticmethod
-    def _migrate(c):
+    def _migrate(c, old_version: int = 0):
         """老库升级：补齐新增列，不清空、不重建，保证历史快照可继续使用。"""
         cols = {r[1] for r in c.execute("PRAGMA table_info(price_tick)").fetchall()}
         if "role" not in cols:
@@ -506,3 +533,37 @@ class DB:
                         "report_id": r["report_id"], "delivered": bool(r["delivered"]),
                         "created_at": r["created_at"]})
         return out
+
+    # ---- 任务状态 / 维护 ----
+    def recent_slots(self, limit: int = 20) -> list[dict]:
+        return self.rows("SELECT fire_key,fired_at,status FROM slot_fire "
+                         "ORDER BY fired_at DESC LIMIT ?", (int(limit),))
+
+    def failed_slots(self, limit: int = 100) -> list[dict]:
+        return self.rows("SELECT fire_key,fired_at,status FROM slot_fire "
+                         "WHERE status='failed' ORDER BY fired_at DESC LIMIT ?", (int(limit),))
+
+    def failed_tasks(self, limit: int = 100) -> list[dict]:
+        return self.rows("SELECT * FROM task_run WHERE status IN ('error','failed') "
+                         "ORDER BY id DESC LIMIT ?", (int(limit),))
+
+    def db_stats(self) -> dict:
+        out = {"path": self.path, "size": os.path.getsize(self.path) if os.path.isfile(self.path) else 0,
+               "schema_version": SCHEMA_VERSION}
+        try:
+            with self.conn() as c:
+                for table in ("price_tick", "news_item", "daily_item", "daily_doc",
+                              "article_cache", "event_log", "task_run"):
+                    out[table] = int(c.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0])
+                out["free_pages"] = int(c.execute("PRAGMA freelist_count").fetchone()[0])
+        except sqlite3.Error as e:
+            out["error"] = str(e)
+        return out
+
+    def vacuum(self):
+        """回收删除后的空闲页；VACUUM 不能在事务里执行。"""
+        con = sqlite3.connect(self.path, timeout=30)
+        try:
+            con.execute("VACUUM")
+        finally:
+            con.close()

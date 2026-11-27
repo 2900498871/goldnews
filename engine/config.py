@@ -66,7 +66,7 @@ def _build_default_config() -> dict:
 
         "smtp": {
             "enabled": False, "host": "", "port": 465, "security": "ssl_tls",
-            "user": "", "credential": "", "from_name": "黄金积存金助手",
+            "user": "", "credential": "", "from_name": "日常小助手",
             "to": [], "cc": [], "max_mails_per_day": 12,
             "timeout_seconds": 20, "retry_times": 3, "html_and_text": True,
         },
@@ -76,6 +76,8 @@ def _build_default_config() -> dict:
             "max_tokens": 1200, "timeout_seconds": 60, "retry_times": 2,
             "json_output": True, "max_calls_per_day": 40,
             "daily_token_budget": 200000, "thinking_enabled": False,
+            # 给每日文档/周期汇总预留的额度：通用研判/快报先停，日报仍有额度可用
+            "reserved_calls_for_daily": 6, "reserved_tokens_for_daily": 30000,
             "prompt_version": "v3",
         },
 
@@ -157,11 +159,13 @@ def _build_default_config() -> dict:
         # 每日军事新闻：中国军网 / 人民网军事（国内）+ 央视国际军事（国际）→ 每日文档 → 周期汇总邮件
         "mil": dict(_digest_defaults("19:40"), max_items=60),
         # 每日综合：三个模块共用一套时间与汇总周期，到点依次生成三份文档，再合成一封邮件
-        "daily_all": dict(_digest_defaults("20:30")),
+        "daily_all": dict(_digest_defaults("20:30"), catchup_days=2),
         # 存储与清理：日志轮转固定 10MB×5；正文 HTML 与文章缓存按天数清理，Markdown 文档永久保留
-        "storage": {"keep_body_days": 365, "keep_cache_days": 180},
+        "storage": {"keep_body_days": 365, "keep_cache_days": 180,
+                    "backup_keep": 10, "vacuum_min_mb": 50, "vacuum_days": 7},
         # 到价 / 均线提醒：rules 为规则列表，冷却时间避免同一条反复发信
-        "alerts": {"enabled": True, "cooldown_hours": 12, "send_mail": True, "rules": []},
+        "alerts": {"enabled": True, "cooldown_hours": 12, "send_mail": True,
+                   "max_age_minutes": 15, "rules": []},
         # 首次配置向导是否已完成（完成后不再自动弹出）
         "setup": {"done": False},
     }
@@ -284,6 +288,13 @@ def _validate(cfg: dict):
         v = ds.get(key)
         if not isinstance(v, int) or v <= 0:
             raise ConfigError("DeepSeek 参数 %s 必须为正整数" % key)
+    for key, lo, hi in (("reserved_calls_for_daily", 0, 40),
+                        ("reserved_tokens_for_daily", 0, 200000)):
+        v = ds.get(key, 0)
+        if not isinstance(v, int) or not (lo <= v <= hi):
+            raise ConfigError("DeepSeek 预留额度 %s 必须为 %d–%d 的整数" % (key, lo, hi))
+    if ds.get("reserved_calls_for_daily", 0) >= ds.get("max_calls_per_day", 40):
+        raise ConfigError("每日预留调用次数必须小于每日调用上限")
     for key in ("max_mails_per_day", "timeout_seconds", "retry_times"):
         v = smtp.get(key)
         if not isinstance(v, int) or v <= 0:
@@ -321,17 +332,27 @@ def _validate(cfg: dict):
     all_sec = cfg.get("daily_all")
     if all_sec is not None:
         _validate_digest_section("每日综合", all_sec)
+        cd = all_sec.get("catchup_days", 0)
+        if not isinstance(cd, int) or not (0 <= cd <= 7):
+            raise ConfigError("跨天补生成天数必须为 0–7 的整数")
     st = cfg.get("storage") or {}
-    for key, lo, hi in (("keep_body_days", 0, 3650), ("keep_cache_days", 0, 3650)):
-        v = st.get(key, 0)
+    st_defaults = {"keep_body_days": 365, "keep_cache_days": 180, "backup_keep": 10,
+                   "vacuum_min_mb": 50, "vacuum_days": 7}
+    for key, lo, hi in (("keep_body_days", 0, 3650), ("keep_cache_days", 0, 3650),
+                        ("backup_keep", 1, 100), ("vacuum_min_mb", 0, 100000),
+                        ("vacuum_days", 0, 365)):
+        v = st.get(key, st_defaults[key])
         if not isinstance(v, int) or not (lo <= v <= hi):
-            raise ConfigError("存储清理天数 %s 必须为 %d–%d 的整数（0 表示永久保留）" % (key, lo, hi))
+            raise ConfigError("存储清理参数 %s 必须为 %d–%d 的整数" % (key, lo, hi))
     al = cfg.get("alerts") or {}
     if not isinstance(al.get("rules", []), list):
         raise ConfigError("到价提醒规则必须是列表")
     ch = al.get("cooldown_hours", 12)
     if not isinstance(ch, (int, float)) or ch < 0:
         raise ConfigError("提醒冷却小时必须为非负数")
+    ma = al.get("max_age_minutes", 15)
+    if not isinstance(ma, int) or not (1 <= ma <= 1440):
+        raise ConfigError("提醒报价最大时效必须为 1–1440 分钟")
     for i, r in enumerate(al.get("rules", []) or [], 1):
         if not isinstance(r, dict):
             raise ConfigError("第 %d 条提醒规则格式不正确" % i)
@@ -377,6 +398,21 @@ class ConfigStore:
             if k not in self.cfg:
                 self.cfg[k] = v
                 changed = True
+        # 旧配置的嵌套段补齐新增键（不覆盖用户已保存值）
+        nested_defaults = {
+            "deepseek": {"reserved_calls_for_daily": 6, "reserved_tokens_for_daily": 30000},
+            "storage": {"backup_keep": 10, "vacuum_min_mb": 50, "vacuum_days": 7},
+            "daily_all": {"catchup_days": 2},
+            "alerts": {"max_age_minutes": 15},
+        }
+        for section, defaults in nested_defaults.items():
+            sec = self.cfg.get(section)
+            if not isinstance(sec, dict):
+                continue
+            for key, val in defaults.items():
+                if key not in sec:
+                    sec[key] = val
+                    changed = True
         # 上金所 Au99.99：旧默认是「需自备接口」的空壳，现在改用新浪行情接口并默认启用
         for s in (self.cfg.get("price_sources") or []):
             if not isinstance(s, dict) or s.get("id") != "sge_au9999":

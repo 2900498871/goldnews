@@ -11,7 +11,7 @@ if not exist "%PY38%" (
 )
 echo [1/2] Generating icon ...
 "%PY38%" -X utf8 desktop\make_icon.py
-echo [2/2] Building dist\win7\GoldDesk.exe (Python 3.8 runtime) ...
+echo [2/2] Building dist\win7\日常小助手.exe (Python 3.8 runtime) ...
 "%PY38%" -X utf8 -m PyInstaller --noconfirm --clean --distpath dist\win7 --workpath build\win7 desktop\GoldDesk-Win7.spec
 if errorlevel 1 (
   echo BUILD FAILED. Check that the venv has: pip install pywebview pyinstaller==5.13.1
@@ -19,6 +19,6 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo DONE: dist\win7\GoldDesk.exe
+echo DONE: dist\win7\日常小助手.exe
 echo Copy the whole "win7" folder to the Windows 7 PC. Data folder is created next to the exe on first run.
 pause

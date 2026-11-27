@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title 黄金积存金助手 - Windows 桌面程序（独立实例）
+title 日常小助手 - Windows 桌面程序（独立实例）
 cd /d "%~dp0.."
 where python >nul 2>nul
 if errorlevel 1 (

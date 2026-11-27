@@ -1,6 +1,12 @@
 /* GoldDesk v1.0 前端：Windows 桌面端（单端，无手机端） */
 (function () {
   'use strict';
+  var GD_TOKEN = (function () {
+    var q = new URLSearchParams(location.search).get('token') || '';
+    if (q) { try { sessionStorage.setItem('gd_token', q); } catch (e) {} return q; }
+    try { return sessionStorage.getItem('gd_token') || window.__GD_TOKEN__ || ''; }
+    catch (e) { return window.__GD_TOKEN__ || ''; }
+  })();
   var S = null, C = null, reportCache = null, reportMode = 'html', setupChecked = false;
   var historyPreset = '6m', historyTouched = false;
   var CN = { bullish: '偏多', bearish: '偏空', neutral: '中性', unclear: '信号不明确' };
@@ -27,7 +33,9 @@
     clearTimeout(toast._t); toast._t = setTimeout(function () { t.className = 'toast'; }, 3600);
   }
   function api(path, method, body) {
-    return fetch(path, { method: method || 'GET', headers: { 'Content-Type': 'application/json' },
+    var h = { 'Content-Type': 'application/json' };
+    if (GD_TOKEN) h['X-GoldDesk-Token'] = GD_TOKEN;
+    return fetch(path, { method: method || 'GET', headers: h,
       body: body ? JSON.stringify(body) : undefined })
       .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); });
   }
@@ -43,6 +51,7 @@
     }
     window.scrollTo(0, 0);
     if (page === 'settings') loadConfig();
+    if (page === 'tasks') loadScheduler();
     if (page === 'history') loadHistoryRuns();
     if (page === 'daily') loadDaily();
     if (page === 'market' && !$('mkSources').dataset.done) runSelfcheck('market');
@@ -642,7 +651,9 @@
       $('f_ds_model_pro').value = d.model_pro || ''; $('f_ds_max_tokens').value = d.max_tokens || 1200;
       $('f_ds_timeout_seconds').value = d.timeout_seconds || 60; $('f_ds_retry_times').value = d.retry_times || 2;
       $('f_ds_max_calls_per_day').value = d.max_calls_per_day || 40;
+      $('f_ds_reserved_calls').value = d.reserved_calls_for_daily || 0;
       $('f_ds_daily_token_budget').value = d.daily_token_budget || 200000;
+      $('f_ds_reserved_tokens').value = d.reserved_tokens_for_daily || 0;
       $('f_ds_prompt_version').value = d.prompt_version || '';
       setSw('f_ds_json_output', d.json_output !== false);
       $('dsState').textContent = d.api_key_set ? '已配置 Key' : '未配置 Key';
@@ -687,10 +698,12 @@
       var st = C.storage || {};
       $('f_keep_body_days').value = st.keep_body_days === undefined ? 365 : st.keep_body_days;
       $('f_keep_cache_days').value = st.keep_cache_days === undefined ? 180 : st.keep_cache_days;
+      $('f_backup_keep').value = st.backup_keep === undefined ? 10 : st.backup_keep;
       var al = C.alerts || {};
       setSw('f_al_enabled', al.enabled !== false);
       setSw('f_al_mail', al.send_mail !== false);
       $('f_al_cooldown').value = al.cooldown_hours === undefined ? 12 : al.cooldown_hours;
+      $('f_al_max_age').value = al.max_age_minutes === undefined ? 15 : al.max_age_minutes;
       renderAlerts(al.rules || []);
       // 首次配置向导：只在第一次打开、且 SMTP 还没配好时自动弹一次
       if (!setupChecked) {
@@ -784,7 +797,9 @@
         timeout_seconds: parseInt($('f_ds_timeout_seconds').value, 10),
         retry_times: parseInt($('f_ds_retry_times').value, 10),
         max_calls_per_day: parseInt($('f_ds_max_calls_per_day').value, 10),
+        reserved_calls_for_daily: parseInt($('f_ds_reserved_calls').value, 10) || 0,
         daily_token_budget: parseInt($('f_ds_daily_token_budget').value, 10),
+        reserved_tokens_for_daily: parseInt($('f_ds_reserved_tokens').value, 10) || 0,
         json_output: isOn('f_ds_json_output')
       },
       history_analysis: collectHistoryConfig()
@@ -1090,6 +1105,7 @@
     $('f_da_time').value = plan.time || '20:30';
     setSw('f_da_ai', plan.ai_enabled !== false);
     setSw('f_da_mail', !!plan.send_mail);
+    $('f_da_catchup').value = plan.catchup_days === undefined ? 2 : plan.catchup_days;
     setPeriods('f_da', periodsOf(plan));
     $('f_da_custom').value = plan.digest_custom_days || 15;
     $('f_da_dtime').value = plan.digest_time || '21:30';
@@ -1108,6 +1124,7 @@
   function saveDailyAll() {
     var all = { enabled: isOn('f_da_enabled'), time: $('f_da_time').value.trim(),
                 ai_enabled: isOn('f_da_ai'), send_mail: isOn('f_da_mail'),
+                catchup_days: parseInt($('f_da_catchup').value, 10) || 0,
                 digest_periods: getPeriods('f_da'),
                 digest_custom_days: parseInt($('f_da_custom').value, 10) || 15,
                 digest_time: $('f_da_dtime').value.trim(),
@@ -1182,7 +1199,7 @@
         (d.combined ? ('；合并邮件' + (mail.ok ? '已发送' : ('未发送：' + (mail.message || '未开启')))) : '');
       toast(msg);
       notifyDesktop('每日内容已生成', part + '/3 份文档' + (mail.ok ? '，合并邮件已发送' : ''));
-      loadState(); loadDaily(); loadConfig();
+      loadState(); loadDaily(); loadConfig(); loadScheduler();
     }).catch(function (e) { stopDaProgress(); toast('请求失败：' + e); notifyDesktop('每日内容生成失败', String(e)); });
   }
   window.runDailyAll = runDailyAll;
@@ -1463,6 +1480,21 @@
     }).catch(function (e) { b.disabled = false; b.textContent = '立即汇总'; toast('请求失败：' + e); });
   }
   window.runDigestNow = runDigestNow;
+  function runDigestAllNow() {
+    var cfg = (C && C.daily_all) || (DL && DL.config) || {};
+    var ps = periodsOf(cfg);
+    if (!ps.length) { toast('未勾选任何汇总周期，请先到设置页选择'); return; }
+    if (cfg.digest_send_mail && !confirm('将按已勾选的周期（' + periodText(cfg) + '）生成三板块汇总并发送合并邮件，继续？')) return;
+    toast('正在生成每日综合汇总…');
+    api('/api/daily/digest_all', 'POST', { force: true, period: ps[0],
+      send_mail: !!cfg.digest_send_mail }).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast(d.not_due ? (d.message || '未到汇总周期') : '失败：' + (d.message || '未知错误')); return; }
+      toast('汇总完成：' + (d.label || '') + (d.missing && d.missing.length ? '（缺：' + d.missing.join('、') + '）' : ''));
+      loadDaily(); loadState(); loadScheduler();
+    }).catch(function (e) { toast('请求失败：' + e); });
+  }
+  window.runDigestAllNow = runDigestAllNow;
   function openDocFolder() {
     api('/api/daily/open', 'POST', { kind: DK }).then(function (r) {
       var d = r.data || {}; if (!ok(r)) toast('打开失败：' + (d.message || '未知错误'));
@@ -1471,7 +1503,7 @@
   window.openDocFolder = openDocFolder;
 
   /* ---------------- 历史文档：日历 / 搜索 / 导出 / 重生成 ---------------- */
-  var DLD = { docs: [], digests: [], month: '' };
+  var DLD = { docs: [], digests: [], month: '', start: '', end: '' };
   function curMonth() {
     var m = ($('dlMonth') && $('dlMonth').value) || '';
     if (!m) { var d = new Date(); m = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
@@ -1480,15 +1512,25 @@
   function loadDailyDocs() {
     var m = curMonth(), q = ($('dlSearch') && $('dlSearch').value || '').trim();
     var mi = $('dlMonth'); if (mi && !mi.value) mi.value = m;
-    DLD.month = m;
-    return api('/api/daily/docs?kind=' + DK + '&month=' + encodeURIComponent(m) +
-               '&q=' + encodeURIComponent(q)).then(function (r) {
+    var start = ($('dlStart') && $('dlStart').value || '').trim();
+    var end = ($('dlEnd') && $('dlEnd').value || '').trim();
+    DLD.month = m; DLD.start = start; DLD.end = end;
+    var qs = '/api/daily/docs?kind=' + DK + '&q=' + encodeURIComponent(q);
+    if (start || end) qs += '&start=' + encodeURIComponent(start) + '&end=' + encodeURIComponent(end);
+    else qs += '&month=' + encodeURIComponent(m);
+    return api(qs).then(function (r) {
       if (!ok(r)) { toast('查询失败：' + ((r.data || {}).message || '未知错误')); return; }
       DLD.docs = (r.data.docs || []); DLD.digests = (r.data.digests || []);
       renderDocHistory();
     }).catch(function (e) { toast('查询失败：' + e); });
   }
   window.loadDailyDocs = loadDailyDocs;
+  function onMonthChange() {
+    if ($('dlStart')) $('dlStart').value = '';
+    if ($('dlEnd')) $('dlEnd').value = '';
+    loadDailyDocs();
+  }
+  window.onMonthChange = onMonthChange;
   var DL_SEARCH_T = null;
   function searchDailyDocs() {
     if (DL_SEARCH_T) clearTimeout(DL_SEARCH_T);
@@ -1525,27 +1567,38 @@
         '<b>' + esc(g.label) + '</b><small>' + g.days + ' 天 · ' + esc(String(g.start_date || '').slice(2, 10)) + '</small>' +
         '<button class="mini" onclick="event.stopPropagation();regenDigest(\'' + esc(g.period) + '\')" style="margin-top:5px">重新生成</button></div>';
     }).join('');
-    $('dlDocs').innerHTML = '<div class="hint" style="margin-bottom:8px">每日文档 · ' + esc(month) + '（' + docs.length + ' 份）</div>' +
+    $('dlDocs').innerHTML = '<div class="hint" style="margin-bottom:8px">每日文档 · ' +
+      esc((DLD.start || DLD.end) ? ((DLD.start || '…') + ' 至 ' + (DLD.end || '…')) : month) +
+      '（' + docs.length + ' 份）</div>' +
       (cards ? '<div class="docgrid">' + cards + '</div>' : '<div class="empty">这个月还没有文档</div>') +
       '<div class="hint" style="margin:14px 0 8px">周期汇总记录（最近 60 条）</div>' +
       (dgs ? '<div class="docgrid">' + dgs + '</div>' : '<div class="empty">尚无汇总记录</div>');
   }
-  function exportDailyMonth() {
+  function exportDailyRange(kind) {
     var m = curMonth();
-    api('/api/export/daily', 'POST', { kind: DK, month: m }).then(function (r) {
+    var start = ($('dlStart') && $('dlStart').value) || (m + '-01');
+    var end = ($('dlEnd') && $('dlEnd').value) || (m + '-31');
+    var label = (kind === 'all' ? '三板块' : '本板块') + ' ' + start + ' 至 ' + end;
+    api('/api/export/daily', 'POST', { kind: kind || DK, start: start, end: end }).then(function (r) {
       var d = r.data || {};
       if (!ok(r)) { toast('导出失败：' + (d.message || '未知错误')); return; }
-      toast('已导出 ' + m + '：' + d.files + ' 个文件（' + Math.round((d.size || 0) / 1024) + ' KB），已打开文件夹');
+      toast('已导出 ' + label + '：' + d.files + ' 个文件（' + Math.round((d.size || 0) / 1024) + ' KB），已打开文件夹');
       api('/api/export/open', 'POST', { path: d.path });
     }).catch(function (e) { toast('导出失败：' + e); });
   }
+  window.exportDailyRange = exportDailyRange;
+  function exportDailyMonth() { exportDailyRange(DK); }
   window.exportDailyMonth = exportDailyMonth;
   function exportTodayDoc(fmt) {
     var d0 = (DL && DL.docs && DL.docs[0]) || (DLD.docs && DLD.docs[0]);
     if (!d0) { toast('今天还没有文档，先生成一次'); return; }
     api('/api/export/doc', 'POST', { path: d0.path, format: fmt }).then(function (r) {
       var d = r.data || {};
-      if (!ok(r)) { toast('导出失败：' + (d.message || '未知错误')); return; }
+      if (!ok(r)) {
+        toast(d.message || '导出失败');
+        if (d.fallback === 'print' && d.path) api('/api/export/open', 'POST', { path: d.path });
+        return;
+      }
       toast('已导出 ' + (fmt === 'pdf' ? 'PDF' : 'Word') + '：' + d.path);
       api('/api/export/open', 'POST', { path: d.path });
     }).catch(function (e) { toast('导出失败：' + e); });
@@ -1591,6 +1644,69 @@
     }).catch(function (e) { toast('备份失败：' + e); });
   }
   window.exportBackup = exportBackup;
+  function exportBackupSecret() {
+    var p = prompt('设置含密钥备份的密码（至少 6 位）。备份里的 SMTP 授权码/DeepSeek Key 会用该密码加密。');
+    if (!p) return;
+    if (p.length < 6) { toast('密码至少 6 位'); return; }
+    if (!confirm('将生成含密钥的备份，请妥善保管密码。继续？')) return;
+    toast('正在打包含密钥备份…');
+    api('/api/export/backup', 'POST', { include_secrets: true, password: p }).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast('备份失败：' + (d.message || '未知错误')); return; }
+      toast('含密钥备份完成：' + Math.round((d.size || 0) / 1024 / 1024 * 10) / 10 + ' MB');
+      api('/api/export/open', 'POST', { path: d.path });
+    }).catch(function (e) { toast('备份失败：' + e); });
+  }
+  window.exportBackupSecret = exportBackupSecret;
+  function exportDiagnostics() {
+    toast('正在生成诊断包…');
+    api('/api/diagnostics', 'POST', {}).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { toast('诊断包失败：' + (d.message || '未知错误')); return; }
+      toast('诊断包已生成：' + Math.round((d.size || 0) / 1024) + ' KB');
+      api('/api/export/open', 'POST', { path: d.path });
+    }).catch(function (e) { toast('诊断包失败：' + e); });
+  }
+  window.exportDiagnostics = exportDiagnostics;
+  var BK_SELECTED = '';
+  function openRestore() {
+    BK_SELECTED = ''; $('bkTip').textContent = ''; $('bkPass').value = '';
+    $('bkList').innerHTML = '<div class="empty">正在读取备份…</div>';
+    $('restoreModal').className = 'modal-mask show';
+    api('/api/export/backups', 'GET').then(function (r) {
+      var bs = (r.data || {}).backups || [];
+      if (!bs.length) { $('bkList').innerHTML = '<div class="empty">还没有备份文件</div>'; return; }
+      $('bkList').innerHTML = bs.map(function (b, i) {
+        return '<div class="bkrow" data-name="' + esc(b.name) + '" onclick="selectBackup(this)">' +
+          '<b>' + esc(b.name) + '</b><small>' + b.mtime + ' · ' +
+          (Math.round((b.size || 0) / 1024 / 1024 * 10) / 10) + ' MB' +
+          (b.include_secrets ? ' · 含加密密钥' : ' · 不含密钥') + '</small></div>';
+      }).join('');
+      BK_SELECTED = bs[0].name;
+      var first = $('bkList').firstChild; if (first) first.classList.add('sel');
+    }).catch(function (e) { $('bkList').innerHTML = '<div class="empty">读取失败：' + esc(String(e)) + '</div>'; });
+  }
+  window.openRestore = openRestore;
+  function selectBackup(el) {
+    var all = document.querySelectorAll('#bkList .bkrow');
+    for (var i = 0; i < all.length; i++) all[i].classList.remove('sel');
+    el.classList.add('sel'); BK_SELECTED = el.getAttribute('data-name') || '';
+  }
+  window.selectBackup = selectBackup;
+  function closeRestore() { $('restoreModal').className = 'modal-mask'; }
+  window.closeRestore = closeRestore;
+  function restoreSelected() {
+    if (!BK_SELECTED) { $('bkTip').textContent = '请先选择一个备份'; return; }
+    if (!confirm('恢复会用备份覆盖当前配置、数据库与同名文档，并先把当前数据移到 pre-restore 目录。确定继续？')) return;
+    $('bkTip').textContent = '正在校验备份…';
+    api('/api/export/restore', 'POST', { name: BK_SELECTED, password: $('bkPass').value || '' }).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) { $('bkTip').textContent = '恢复失败：' + (d.message || '未知错误'); return; }
+      $('bkTip').textContent = d.message || '已暂存，重启后生效';
+      toast('恢复已暂存；请退出程序并重新启动');
+    }).catch(function (e) { $('bkTip').textContent = '恢复失败：' + e; });
+  }
+  window.restoreSelected = restoreSelected;
   function exportTrades() {
     api('/api/export/trades', 'POST', {}).then(function (r) {
       var d = r.data || {};
@@ -1605,11 +1721,221 @@
     }).catch(function () {});
   }
   window.hideToTray = hideToTray;
+  function closeToTray() {
+    api('/api/window', 'POST', { action: 'close' }).then(function (r) {
+      if (!ok(r)) toast('关闭到托盘失败：' + ((r.data || {}).message || '未知错误'));
+    }).catch(function () {});
+  }
+  window.closeToTray = closeToTray;
+
+  /* ---------------- 任务中心 ---------------- */
+  function taskStatusCn(s) {
+    s = String(s || '');
+    if (s === 'ok' || s === 'done') return '成功';
+    if (s === 'error' || s === 'failed') return '失败';
+    if (s === 'running' || s === 'firing') return '执行中';
+    if (s === 'no_data') return '无数据';
+    if (s === 'daily_limit') return '超限跳过';
+    if (s === 'quiet') return '静默跳过';
+    if (s === 'market_closed') return '休市跳过';
+    return s || '—';
+  }
+  function taskTagCls(s) {
+    s = String(s || '');
+    return (s === 'ok' || s === 'done') ? 'blue' : ((s === 'error' || s === 'failed') ? 'red' : 'gray');
+  }
+  function fmtRemain(sec) {
+    var s = parseInt(sec, 10);
+    if (isNaN(s)) return '';
+    if (s <= 60) return '即将到点';
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h ? ('还有 ' + h + ' 小时' + (m ? ' ' + m + ' 分钟' : '')) : ('还有 ' + m + ' 分钟');
+  }
+  function taskLatency(ms) {
+    var n = parseInt(ms, 10) || 0;
+    if (!n) return '';
+    return n >= 1000 ? (n / 1000).toFixed(1) + ' 秒' : n + ' ms';
+  }
+  function triggerCn(s) {
+    s = String(s || '');
+    return { scheduled: '定时', manual: '手动', startup: '启动', retry: '重试' }[s] || (s || '—');
+  }
+  var TASK_RUNS = [], TASK_PAGE = 1, TASK_PAGE_SIZE = 6, TASK_DETAIL = null;
+  var TASK_DOC_KIND = '', TASK_DOC_DAY = '';
+  function renderTaskTimeline() {
+    if (!$('taskTimeline')) return;
+    var pages = Math.max(1, Math.ceil(TASK_RUNS.length / TASK_PAGE_SIZE));
+    if (TASK_PAGE > pages) TASK_PAGE = pages;
+    if (TASK_PAGE < 1) TASK_PAGE = 1;
+    var start = (TASK_PAGE - 1) * TASK_PAGE_SIZE;
+    var pageRows = TASK_RUNS.slice(start, start + TASK_PAGE_SIZE);
+    $('taskTimeline').innerHTML = pageRows.length ? pageRows.map(function (x) {
+      var lat = taskLatency(x.latency_ms);
+      return '<div class="runrow clickable" onclick="openTaskDetail(\'' + esc(x.id) + '\')">' +
+        '<div class="rhead"><b>' + esc(x.name_cn || x.task_name || '任务') + '</b>' +
+        '<span class="tag ' + taskTagCls(x.status) + '">' + esc(taskStatusCn(x.status)) + '</span>' +
+        '<small>' + esc(fmtBj(x.finished_at || x.started_at)) + '</small></div>' +
+        '<div class="rdesc">触发：' + esc(triggerCn(x.trigger_source)) +
+        (lat ? ' · 耗时 ' + esc(lat) : '') + (x.finished_at ? ' · 完成于 ' + esc(fmtBj(x.finished_at)) : '') +
+        '</div>' + (x.error ? '<div class="errline">' + esc(x.error) + '</div>' : '') +
+        '<div class="rclick">点开查看内容 →</div></div>';
+    }).join('') : '<div class="empty">还没有任务运行记录。</div>';
+    var pager = $('taskPager');
+    if (pager) pager.style.display = pages > 1 ? 'flex' : 'none';
+    if ($('taskPageInfo')) $('taskPageInfo').textContent = pages > 1 ? ('第 ' + TASK_PAGE + ' / ' + pages + ' 页') : '';
+    if ($('taskPrev')) $('taskPrev').disabled = TASK_PAGE <= 1;
+    if ($('taskNext')) $('taskNext').disabled = TASK_PAGE >= pages;
+  }
+  function taskPage(delta) {
+    TASK_PAGE += (delta || 0);
+    renderTaskTimeline();
+  }
+  window.taskPage = taskPage;
+  function taskResult(raw) {
+    if (!raw) return '无运行结果字段';
+    try {
+      var obj = JSON.parse(raw);
+      return '<pre class="tdjson">' + esc(JSON.stringify(obj, null, 2)) + '</pre>';
+    } catch (e) {
+      return '<pre class="tdjson">' + esc(raw) + '</pre>';
+    }
+  }
+  function openTaskDetail(id) {
+    var r = null;
+    for (var i = 0; i < TASK_RUNS.length; i++) {
+      if (String(TASK_RUNS[i].id) === String(id)) { r = TASK_RUNS[i]; break; }
+    }
+    if (!r) return;
+    TASK_DETAIL = r;
+    $('tdTitle').textContent = r.name_cn || r.task_name || '任务详情';
+    $('tdStatus').className = 'tag ' + taskTagCls(r.status);
+    $('tdStatus').textContent = taskStatusCn(r.status);
+    $('tdWhen').textContent = fmtBj(r.finished_at || r.started_at);
+    $('tdMeta').innerHTML = [
+      ['任务标识', r.task_name || '—'],
+      ['触发来源', triggerCn(r.trigger_source)],
+      ['开始时间', fmtBj(r.started_at)],
+      ['完成时间', fmtBj(r.finished_at)],
+      ['耗时', taskLatency(r.latency_ms) || '—'],
+      ['记录编号', String(r.id || '—')]
+    ].map(function (x) {
+      return '<div class="tdmeta"><span>' + x[0] + '</span><b>' + esc(x[1]) + '</b></div>';
+    }).join('');
+    $('tdResult').innerHTML = taskResult(r.source_status_json);
+    $('tdError').textContent = r.error || '无';
+    $('tdError').style.color = r.error ? '#A33' : '';
+    var docMap = { 'daily:news': 'news', 'daily:brief': 'brief', 'daily:mil': 'mil' };
+    TASK_DOC_KIND = docMap[r.task_name] || '';
+    TASK_DOC_DAY = String(r.started_at || '').slice(0, 10);
+    var btn = $('tdDocBtn');
+    if (btn) btn.style.display = (TASK_DOC_KIND && TASK_DOC_DAY && r.status === 'ok') ? '' : 'none';
+    $('taskModal').className = 'modal-mask show';
+  }
+  window.openTaskDetail = openTaskDetail;
+  function closeTaskDetail() { $('taskModal').className = 'modal-mask'; }
+  window.closeTaskDetail = closeTaskDetail;
+  function openTaskDoc() {
+    if (!TASK_DOC_KIND || !TASK_DOC_DAY) return;
+    var q = '/api/daily/docs?kind=' + encodeURIComponent(TASK_DOC_KIND) +
+      '&start=' + TASK_DOC_DAY + '&end=' + TASK_DOC_DAY;
+    api(q).then(function (r) {
+      var d = r.data || {};
+      var doc = (d.docs || []).filter(function (x) { return x.day === TASK_DOC_DAY; })[0];
+      if (!doc || !doc.path) { toast('当天没有找到对应文档'); return; }
+      closeTaskDetail();
+      viewDocPath(doc.path);
+    }).catch(function (e) { toast('打开文档失败：' + e); });
+  }
+  window.openTaskDoc = openTaskDoc;
+  function loadScheduler() {
+    return api('/api/scheduler/status').then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) {
+        if ($('taskNow')) $('taskNow').textContent = '读取失败';
+        if ($('taskUpcoming')) $('taskUpcoming').innerHTML = '<div class="empty">任务状态读取失败</div>';
+        return;
+      }
+      if (!$('taskUpcoming')) return;
+      $('taskNow').textContent = d.running
+        ? ('调度器运行中' + (d.daily_running ? ' · 文档任务执行中' : ''))
+        : '调度器未运行';
+      $('taskClock').textContent = '本机时间 ' + fmtBj(d.now);
+      $('taskNextPush').textContent = '下一次自定义推送：' + (d.next_push || '无');
+      $('taskHint').textContent = d.busy || d.daily_running
+        ? '每日任务正在写文档，此时不会再启动第二个文档任务。' : '';
+
+      var up = d.upcoming || d.next || [];
+      $('taskUpcoming').innerHTML = up.length ? up.map(function (x) {
+        var last = x.last_status
+          ? '<span class="jmeta">上次：' + esc(taskStatusCn(x.last_status)) + ' · ' + esc(fmtBj(x.last_at)) + '</span>'
+          : '';
+        return '<div class="jobcard">' +
+          '<div class="jtime"><b>' + esc(x.time || '—') + '</b><span>' +
+          (x.tomorrow ? '明天' : '今天') + '</span></div>' +
+          '<div class="jbody"><div class="jtit"><b>' + esc(x.label || x.kind) + '</b>' +
+          '<span class="tag ' + (x.source === 'slot' ? 'gray' : 'blue') + '">' +
+          (x.source === 'slot' ? '自定义时点' : '每日任务') + '</span>' +
+          '<span class="jd">' + esc(fmtRemain(x.seconds)) + '</span></div>' +
+          '<div class="jdesc">' + esc(x.desc || '') + '</div>' +
+          '<div class="jmeta">执行时间 ' + esc(fmtBj(x.at)) + (last ? last : '') + '</div>' +
+          '</div></div>';
+      }).join('') : '<div class="empty">没有已启用的定时任务；到设置页开启每日内容或添加推送时点。</div>';
+
+      var statusRows = [
+        ['调度线程', d.running ? '运行中' : '已停止', d.running ? 'blue' : 'red'],
+        ['日报/汇总线程', d.daily_running ? '执行中' : '空闲', d.daily_running ? 'blue' : 'gray'],
+        ['补生成线程', d.catchup_running ? '执行中' : '空闲', d.catchup_running ? 'blue' : 'gray'],
+        ['文档任务互斥', d.busy ? '正在占用' : '空闲', d.busy ? 'blue' : 'gray']
+      ];
+      $('taskStatus').innerHTML = (d.current_job
+        ? '<div class="kvrow"><span>当前执行</span><b class="tag blue">' + esc(d.current_job) + '</b></div>'
+        : '') + statusRows.map(function (r) {
+        return '<div class="kvrow"><span>' + r[0] + '</span><b class="tag ' + r[2] + '">' + r[1] + '</b></div>';
+      }).join('');
+
+      var fails = d.failures || [];
+      $('taskFailCount').textContent = fails.length ? ('共 ' + fails.length + ' 条失败记录') : '暂无失败记录';
+      $('taskFailures').innerHTML = fails.length ? fails.map(function (x) {
+        var retry = x.key
+          ? '<button class="btn sm" data-k="' + esc(x.key) + '" onclick="retrySlot(this.getAttribute(\'data-k\'))">重试</button>'
+          : '';
+        var lat = taskLatency(x.latency_ms);
+        return '<div class="failrow"><div class="fhead"><b>' + esc(x.name || '任务') + '</b>' +
+          '<span class="tag red">' + esc(taskStatusCn(x.status)) + '</span>' +
+          '<small>' + esc(fmtBj(x.at)) + '</small></div>' +
+          '<div class="fmsg">' + esc(x.error || '任务返回错误，详情见运行日志') + '</div>' +
+          '<div class="fmeta">来源：' + (x.source === 'slot' ? '定时时点' : '任务运行') +
+          (x.trigger ? ' · 触发：' + esc(triggerCn(x.trigger)) : '') + (lat ? ' · 耗时 ' + esc(lat) : '') +
+          (retry ? ' ' + retry : '') + '</div></div>';
+      }).join('') : '<div class="empty">最近没有失败记录。任务成功或正常跳过不会显示在这里。</div>';
+
+      TASK_RUNS = (d.recent_tasks || []).filter(function (x) { return x.task_name !== 'pipeline:prices'; });
+      var polls = (d.recent_tasks || []).length - TASK_RUNS.length;
+      if ($('taskTimelineSub')) {
+        $('taskTimelineSub').textContent = '文档、汇总与采集任务' + (polls ? ' · 已折叠 ' + polls + ' 次价格轮询' : '');
+      }
+      renderTaskTimeline();
+    }).catch(function (e) {
+      if ($('taskNow')) $('taskNow').textContent = '读取失败：' + e;
+      if ($('taskUpcoming')) $('taskUpcoming').innerHTML = '<div class="empty">读取任务状态失败：' + esc(e) + '</div>';
+    });
+  }
+  window.loadScheduler = loadScheduler;
+  function retrySlot(key) {
+    if (!confirm('清除 ' + key + ' 的完成标记，让调度器下一轮重试？')) return;
+    api('/api/scheduler/retry', 'POST', { key: key }).then(function (r) {
+      var d = r.data || {};
+      toast(d.ok ? '已安排重试' : ('失败：' + (d.message || '未知错误')));
+      loadScheduler();
+    }).catch(function (e) { toast('重试失败：' + e); });
+  }
+  window.retrySlot = retrySlot;
 
   /* ---------------- 存储 / 提醒 / 配置向导 ---------------- */
   function saveStorage() {
     var st = { keep_body_days: parseInt($('f_keep_body_days').value, 10) || 0,
-               keep_cache_days: parseInt($('f_keep_cache_days').value, 10) || 0 };
+               keep_cache_days: parseInt($('f_keep_cache_days').value, 10) || 0,
+               backup_keep: parseInt($('f_backup_keep') && $('f_backup_keep').value, 10) || 10 };
     api('/api/config', 'POST', { config: { storage: st }, summary: '存储清理设置' }).then(function (r) {
       if (!ok(r)) { toast('保存失败：' + ((r.data || {}).message || '未知错误')); return; }
       toast('清理设置已保存'); loadConfig();
@@ -1652,7 +1978,9 @@
   }
   function saveAlerts() {
     var al = { enabled: isOn('f_al_enabled'), send_mail: isOn('f_al_mail'),
-               cooldown_hours: parseFloat($('f_al_cooldown').value) || 0, rules: collectAlerts() };
+               cooldown_hours: parseFloat($('f_al_cooldown').value) || 0,
+               max_age_minutes: parseInt($('f_al_max_age') && $('f_al_max_age').value, 10) || 15,
+               rules: collectAlerts() };
     api('/api/config', 'POST', { config: { alerts: al }, summary: '到价提醒设置' }).then(function (r) {
       if (!ok(r)) { toast('保存失败：' + ((r.data || {}).message || '未知错误')); return; }
       toast('提醒设置已保存，行情采集后立即生效'); loadConfig();
@@ -1718,6 +2046,7 @@
   loadHistoryRuns();
   setTimeout(loadConfig, 300);
   setInterval(function () { if (document.visibilityState === 'visible') loadState(); }, 30000);
+  setInterval(function () { if (document.visibilityState === 'visible') loadScheduler(); }, 60000);
   // 支持 ?page=xxx 直接打开指定模块（便于快捷方式与分享链接）
   var pm = /[?&]page=([a-z0-9-]+)/i.exec(location.search);
   if (pm) go(pm[1].toLowerCase());

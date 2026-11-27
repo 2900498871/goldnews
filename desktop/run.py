@@ -28,7 +28,7 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
-    ap = argparse.ArgumentParser(description="黄金积存金助手 · Windows 桌面程序")
+    ap = argparse.ArgumentParser(description="日常小助手 · Windows 桌面程序")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-window", action="store_true")
@@ -37,11 +37,22 @@ def main():
     ap.add_argument("--send-mail", action="store_true")
     a = ap.parse_args()
 
-    # 同一端口只允许一个实例：重复双击时激活已运行窗口，不再抢端口/数据库
+    # 同一端口只允许一个实例；后台无窗口实例不占 GUI 锁，GUI 可复用已有服务
     if not (a.selfcheck or a.fetch):
-        from engine.single import ensure_single
-        if not ensure_single(a.port):
+        from engine.single import ensure_single, port_in_use
+        if not ensure_single(a.port, gui=not a.no_window):
             print("检测到本程序已在运行，已切换到现有窗口。", flush=True)
+            return
+        if port_in_use(a.port) and not a.no_window:
+            from launcher import open_desktop_window, install_tray
+            install_tray(os.path.join(ROOT, "desktop", "GoldDesk.ico"))
+            open_desktop_window("http://127.0.0.1:%d/" % a.port, "日常小助手", 1440, 900,
+                                icon_path=os.path.join(ROOT, "desktop", "GoldDesk.ico"),
+                                data_dir=os.path.join(ROOT, "desktop", "data"),
+                                profile_dir=os.path.join(ROOT, "desktop", "data", "browser-profile"))
+            return
+        if port_in_use(a.port) and a.no_window:
+            print("同一端口已有实例在运行，后台实例不再重复启动。", flush=True)
             return
 
     inst = Instance(ROOT, a.port, a.host)
@@ -82,7 +93,7 @@ def main():
             break
         time.sleep(0.1)
     install_tray(os.path.join(ROOT, "desktop", "GoldDesk.ico"))
-    open_desktop_window(url, "黄金积存金助手 v1.0", 1440, 900,
+    open_desktop_window(url, "日常小助手", 1440, 900,
                         icon_path=os.path.join(ROOT, "desktop", "GoldDesk.ico"),
                         data_dir=inst.data_dir,
                         profile_dir=os.path.join(inst.data_dir, "browser-profile"))

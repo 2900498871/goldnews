@@ -225,7 +225,7 @@ def _wrap(title: str, body: str) -> str:
             '<div class="gd-card" style="max-width:680px;width:100%%;box-sizing:border-box;margin:0 auto;'
             'background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 12px rgba(20,40,80,.06)">'
             '<h2 style="margin:0 0 4px;font-size:18px;line-height:1.5">%s</h2>'
-            '<div style="font-size:11px;color:#8490A3;margin-bottom:14px">黄金积存金助手 · 准实时（2–5 分钟级） · 北京时间 %s · 单用户自用</div>'
+            '<div style="font-size:11px;color:#8490A3;margin-bottom:14px">日常小助手 · 准实时（2–5 分钟级） · 北京时间 %s · 单用户自用</div>'
             '%s'
             '<div style="margin-top:18px;padding-top:12px;border-top:1px solid #EDF1F7;font-size:11px;color:#5B6472;line-height:1.7">%s</div>'
             '</div></div></body></html>') % (_e(title), _e(title), _e(bj_str(now_bj())), body, _e(DISCLAIMER))

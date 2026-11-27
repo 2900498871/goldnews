@@ -2,7 +2,24 @@
 
 > 对应需求文档 `docs/PRD-黄金积存金投资助手-v0.1.md`（内容 v0.5）与高保真原型 `prototype/index.html`。
 > v1 覆盖里程碑 **M1–M3 + 部分 M4**：核心链路全部跑通，7 屏界面（含 FR-16 时段新闻研判）。
-> **本版只保留 Windows 桌面端**：手机端（Android APK）与 mobile 预览实例已移除，唯一可执行产物是 `dist/GoldDesk.exe`。
+> **本版只保留 Windows 桌面端**：手机端（Android APK）与 mobile 预览实例已移除，唯一可执行产物是 `dist/日常小助手.exe`。
+
+**2026-11-27 第十轮（14 项：可靠性 / 任务中心 / 备份恢复 / 日志与窗口）**
+
+- **单实例修正**：GUI 实例与 `--no-window` 后台实例改用两个互斥量（`Local\GoldDesk-<端口>` / `-headless`）。后台先跑时双击 GUI 不再被互斥量挡住，而是复用已有 HTTP 服务只开窗口；后台重复启动直接退出，GUI 重复启动会唤回已运行（含托盘隐藏）的窗口后退出，避免两个进程抢数据库。
+- **局域网 API 鉴权**：仅当 `--host` 不是 127.0.0.1/localhost/::1 时启用。令牌落盘 `data/api_token.txt`，所有 `/api/*`（`/api/health` 除外）校验 `X-GoldDesk-Token` 或 `?token=` / POST body `token`；本机浏览器打开的首页自动注入令牌，远程需使用启动日志里的 `?token=` 地址。
+- **过期报价不触发提醒**：到价/涨跌/MA20 提醒只接受 `quality_flag=ok` 且 `source_ts` 在 `alerts.max_age_minutes`（默认 15 分钟）内的报价；stale、cached、unknown_ts、mock/divergent 报价一律不参与。
+- **备份恢复与密钥导出**：备份新增 `backup_manifest.json`（版本、时间、库 SHA256、文档数），可选生成密码加密的 `secrets.enc`（scrypt + HMAC-SHA256）；设置页可列备份、恢复备份；恢复会先做 manifest/库哈希/`PRAGMA integrity_check`/路径穿越校验，暂存到 `data/restore_pending`，重启时把当前配置/库/文档移到 `data/pre-restore-<时间>` 后再应用。备份按 `storage.backup_keep` 保留最近 N 份。
+- **跨天补生成**：启动 3 秒后检查最近 `daily_all.catchup_days`（默认 2）天，若某天没有文档但有本机条目，则只用本机已存条目补生成三份日报与合并文档，不重新采集、不发旧邮件；`catchup|all|<日期>` 去重，补生成标题下会标注说明。
+- **AI 每日额度预留**：`deepseek.reserved_calls_for_daily`（默认 6 次）和 `reserved_tokens_for_daily`（默认 30000）从通用研判/快报的可用额度里扣掉，只有每日文档/周期汇总（`daily=True`）能用完整上限，避免 19:41 实测撞 40 次/日上限导致综合日报退化为摘要拼贴。
+- **关闭窗口收进托盘**：WebView2 窗口的 Alt+F4/系统关闭被拦截为隐藏到托盘；顶栏新增关闭按钮、`/api/window` 的 `close` 也只隐藏；只有顶栏退出、托盘「退出程序」或 `--stop` 才真正结束服务。第一次隐藏会弹一次托盘提示。
+- **stdout 日志轮转**：frozen 模式的 stdout/stderr 落到 `data/stdout.log`，10MB × 5 份自动轮转。
+- **任务中心**：左侧导航「每日新闻」下新增独立「任务中心」页（设置页不再放任务卡）。展示调度线程/日报线程/补生成/文档互斥状态、下一次自定义推送、即将执行的每日内容与汇总（含执行时间、倒计时、上次结果）、启用中的自定义推送时点，以及最近失败记录（任务错误 + 自动重试仍失败的时点）和最近任务运行明细（触发来源、耗时、错误原因）。最近执行按 6 条一页分页，点击任意记录打开详情弹窗，可查看运行结果 JSON、错误原因；每日文档任务还提供「查看当天文档」。失败时点可一键重试；支持 `POST /api/scheduler/retry` 清除某时点标记让下一轮重试，并提供「立即生成今日内容 / 立即生成汇总」。
+- **全文搜索与区间导出**：`GET /api/daily/docs` 支持 `start/end`（兼容 month），关键词同时查日期、AI 摘要、条目标题/摘要，并对摘要未命中的 Markdown 文档读取正文生成上下文片段；每日页新增起止日期输入，支持导出本板块 / 三板块 Zip（含 `.md` 与 `.正文.html`）。
+- **真 DOCX 与 PDF 回退**：Word 导出改为 `python-docx` 生成真正的 `.docx`（标题、列表、引用、粗体/行内代码清洗）；PDF 找不到 Edge/Chrome 时生成可打印 HTML 并打开，接口返回 `fallback=print`，界面提示 Ctrl+P 另存。
+- **诊断包**：`POST /api/diagnostics` 生成 `日常小助手-诊断-<时间>.zip`，含系统/Python/exe/data 目录/磁盘、脱敏配置、调度状态、运行状态、数据库统计、最近 200 条事件、最近 30 条新闻文档、`app.log` 与 `stdout.log` 尾部 2MB。
+- **数据库版本迁移与 VACUUM**：`SCHEMA_VERSION=2`，启动读 `PRAGMA user_version`，旧库先复制 `.pre-v<old>.bak` 再补列/回填/建索引；`storage.vacuum_min_mb`（默认 50MB）与 `vacuum_days`（默认 7 天）控制启动时 VACUUM，成功后写 `data/.last_vacuum`；补 `db_stats()` 与 `最近时点` 查询。
+- **托盘 Explorer 重启与通知点击**：注册 `TaskbarCreated`，Explorer 重启后自动重新 `NIM_ADD` 托盘图标；气泡被点击（`NIN_BALLOONUSERCLICK`）与双击一样恢复主窗口。
 
 **2026-11-27 第九轮（可靠性 / 历史管理 / 提醒与备份，13 项）**
 
@@ -19,7 +36,7 @@
 - **邮件模板预览**：每日页可预览合并邮件，支持桌面 / 手机两种宽度，所见即所发。
 - **到价 / 涨跌 / MA20 提醒**：设置页新增提醒规则（价格高于/低于、涨幅/跌幅、MA20 上穿/下穿），按 Au99.99 判定，带冷却小时；命中写事件，可选发一封快报邮件；默认关闭。
 - **导出与备份**：一键备份配置 + 数据库 + 文档（热备份 SQLite，跳过浏览器缓存，实测 0.7MB）；持仓与交易导出 CSV；文档可导出 Word/PDF；可打开导出目录。
-- **注意**：备份不含 `secrets.bin`（DPAPI 加密的 SMTP 授权码 / DeepSeek Key），换机恢复后需重新录入密钥。
+- **注意**：第九轮的备份不含 `secrets.bin`（DPAPI 加密的 SMTP 授权码 / DeepSeek Key），换机恢复后需重新录入密钥；第十轮已增加「含密钥备份」（密码加密 `secrets.enc`）与恢复入口。
 
 **2026-11-27 第八轮（每日内容合并设置 / 三份文档合成一封邮件）**
 
@@ -32,9 +49,9 @@
 
 **2026-11-27 第七轮（修「打包后窗口一闪就退」）**
 
-- **现象**：打完包双击 `dist\GoldDesk.exe`，后台起来了（日志有「GoldDesk 桌面端已启动」），但窗口瞬间消失，服务跟着停；偶尔会残留一个标题为 `127.0.0.1` 的 Edge 窗口。
-- **根因**：`dist\GoldDesk.exe` 被 **Win7 版（Python 3.8 构建）** 覆盖了。3.8 的包不含 pywebview → 走 Edge `--app` 回退；而专属 `browser-profile` 已被上一次残留的 Edge 进程占着，Chromium 单实例把新窗口交给老进程后自己退出，程序误判「窗口已关闭」→ 关停后台服务。正常主版日志里必须有 `已打开 WebView2 无边框窗口：…`，被覆盖的包里没有这行。
-- **修复**：重新用 Python 3.13 打主版（13.65MB），Win7 版单独落在 `dist\win7\GoldDesk.exe`（9.94MB）。新增 `desktop\打包exe-主版.bat`：打完会检查 exe 体积，小于 12MB 直接报错（说明 pywebview 没打进去 / 被 3.8 包覆盖）。
+- **现象**：打完包双击 `dist\日常小助手.exe`，后台起来了（日志有「日常小助手 已启动」），但窗口瞬间消失，服务跟着停；偶尔会残留一个标题为 `127.0.0.1` 的 Edge 窗口。
+- **根因**：`dist\日常小助手.exe` 被 **Win7 版（Python 3.8 构建）** 覆盖了。3.8 的包不含 pywebview → 走 Edge `--app` 回退；而专属 `browser-profile` 已被上一次残留的 Edge 进程占着，Chromium 单实例把新窗口交给老进程后自己退出，程序误判「窗口已关闭」→ 关停后台服务。正常主版日志里必须有 `已打开 WebView2 无边框窗口：…`，被覆盖的包里没有这行。
+- **修复**：重新用 Python 3.13 打主版（13.65MB），Win7 版单独落在 `dist\win7\日常小助手.exe`（9.94MB）。新增 `desktop\打包exe-主版.bat`：打完会检查 exe 体积，小于 12MB 直接报错（说明 pywebview 没打进去 / 被 3.8 包覆盖）。
 - **打包顺序（重要）**：先跑 `打包exe-Win7.bat`，最后再跑 `打包exe-主版.bat`。主版必须是最后一步，否则会被小包覆盖。
 - 遇到残留 Edge 窗口：关掉那个 `127.0.0.1` 窗口，或删 `data\browser-profile` 后重启（只影响窗口，不删数据）。
 
@@ -62,7 +79,7 @@
 
 **2026-11-26 第三轮（开机自启动 / 每日新闻 / 每日资讯）**
 
-- **开机自启动**：设置页新增「开机自启动」开关。开启 = 在当前 Windows 用户的启动项（注册表 `HKCU\...\Run`，名 `GoldDesk`）登记本程序，登录后自动启动；关闭 = 删除该项。**不需要管理员权限**，状态以注册表真实值为准。建议在打包版 exe 上开启（登记的是 exe 自身路径）。
+- **开机自启动**：设置页新增「开机自启动」开关。开启 = 在当前 Windows 用户的启动项（注册表 `HKCU\...\Run`，名 `日常小助手`）登记本程序，登录后自动启动；关闭 = 删除该项。**不需要管理员权限**，状态以注册表真实值为准。建议在打包版 exe 上开启（登记的是 exe 自身路径）。
 - **每日新闻**（侧栏新模块，在「策略与情景」之后）：定时采集 **央视新闻**（要闻 / 国内 / 国际 / 社会 / 科技 5 个栏目）+ **互联网热搜**（微博 / 百度 / 抖音 / B站 / 知乎），按栏目 / 平台排名排列，由 **DeepSeek 归纳**成「今日要闻 / 财经与黄金相关线索 / 热搜观察」，每天落一份 **Markdown 文档**。
 - **每日资讯**（同一页第二个页签）：素材就是「资讯与 AI 研判」页当日内容（当日财经要闻 + 当日 AI 研判结论），AI 归纳成「今日要点 / 与金价相关的线索 / 当日研判回顾」，每天一份 Markdown 文档。
 - **周期汇总 + 邮箱**：两类文档都支持 **每天 / 每周 / 每月 / 每半年 / 每年 / 自定义间隔天数** 的 AI 二次汇总，**周期可多选**（比如同时勾「每周 + 每月」，各出各的汇总文档、各记各的到期），并可发送到邮箱；「每日总结是否发邮箱」与「汇总是否发邮箱」各自独立开关，时间、条数、平台、文档目录都可在设置页调整。错过的时点（关机）会在下次开机后自动补做。
@@ -93,11 +110,11 @@
 
 | 产物 | 用法 |
 |---|---|
-| `dist\GoldDesk.exe` | 双击即可，**不需要安装 Python、不需要 pip install**。自动打开无边框应用窗口，地址 `http://127.0.0.1:8765/`。适用 Windows 10 / 11 |
-| `dist\win7\GoldDesk.exe` | **Win7 兼容版**（Python 3.8.10 运行时，功能与主版相同），适用 Windows 7 SP1 64 位。把整个 `win7` 文件夹拷到目标电脑再用，前置条件见下方「Win7 兼容版」 |
+| `dist\日常小助手.exe` | 双击即可，**不需要安装 Python、不需要 pip install**。自动打开无边框应用窗口，地址 `http://127.0.0.1:8765/`。适用 Windows 10 / 11 |
+| `dist\win7\日常小助手.exe` | **Win7 兼容版**（Python 3.8.10 运行时，功能与主版相同），适用 Windows 7 SP1 64 位。把整个 `win7` 文件夹拷到目标电脑再用，前置条件见下方「Win7 兼容版」 |
 
 exe 首次运行会在 **exe 同目录**创建 `data\`（配置、SQLite、密钥、日志、WebView2 用户数据目录），卸载/备份时保留这个目录即可。
-退出方式：点顶栏 **「退出」按钮**（在「自检」右侧，会同时关闭窗口与后台服务），或命令行 `GoldDesk.exe --stop`；关掉窗口（Alt+F4 / 点退出）同样会停掉后台服务。
+退出方式：点顶栏 **「退出」按钮**（会同时关闭窗口与后台服务），或命令行 `日常小助手.exe --stop`；Alt+F4 或系统关闭按钮只会收进托盘，再双击 exe 会直接唤回已运行的窗口。
 
 **桌面端窗口说明**：用 **pywebview + 系统 WebView2** 承载界面，是无原生标题栏、无系统边框的干净窗口。
 - **拖动**：按住顶栏空白处（品牌区或中间空白）拖动，窗口 1:1 跟手，不闪不抖。
@@ -130,9 +147,9 @@ python -X utf8 desktop\run.py
 ```
 v2/
 ├── dist/
-│   ├── GoldDesk.exe              ★ Windows 桌面程序（单文件，自带图标）
+│   ├── 日常小助手.exe              ★ Windows 桌面程序（单文件，自带图标）
 │   ├── data/                     exe 运行时生成的本端数据（首次启动创建）
-│   └── win7/                     Win7 兼容版 GoldDesk.exe（Python 3.8 运行时）及其 data/
+│   └── win7/                     Win7 兼容版 日常小助手.exe（Python 3.8 运行时）及其 data/
 ├── engine/                      核心引擎（零第三方依赖）
 │   ├── util.py                  时区(UTC+8)/日志脱敏/HTTP/哈希/静默判定
 │   ├── secrets.py               本端密钥安全存储（Windows DPAPI）
@@ -160,7 +177,7 @@ v2/
 │   ├── 打包exe.bat             一键重打 exe（主版）
 │   ├── 打包exe-Win7.bat        一键重打 Win7 版 exe
 │   ├── make_icon.py             多尺寸 ico 生成器（纯标准库）
-│   ├── GoldDesk.ico             exe / 窗口图标（16/32/48/64/128）
+│   ├── GoldDesk.ico             exe / 窗口 / 托盘图标（16–256，动漫女孩）
 │   ├── 打包exe.bat             一键重打 exe
 │   ├── ui/                      8 屏界面（index.html / app.js / style.css）
 │   ├── data/                    源码模式本端数据（配置、SQLite、密钥、每日新闻 / 每日资讯文档）
@@ -238,7 +255,7 @@ v2/
 
 ### 开机自启动
 
-设置页「开机自启动」卡片，开关即开即关，无需保存。开启后登录 Windows 自动启动本程序（打包版登记 `GoldDesk.exe` 路径；源码运行登记 `pythonw.exe + desktop\run.py`）。只影响当前 Windows 用户，不弹 UAC。
+设置页「开机自启动」卡片，开关即开即关，无需保存。开启后登录 Windows 自动启动本程序（打包版登记 `日常小助手.exe` 路径；源码运行登记 `pythonw.exe + desktop\run.py`）。只影响当前 Windows 用户，不弹 UAC。
 
 ### 每日内容（新闻 · 资讯 · 军事，合并设置）
 
@@ -274,10 +291,10 @@ python -X utf8 desktop\run.py --fetch daily --send-mail
 python -X utf8 desktop\run.py --no-window
 
 :: exe 模式
-dist\GoldDesk.exe --selfcheck
-dist\GoldDesk.exe --fetch flash
-dist\GoldDesk.exe --no-window --port 8790
-dist\GoldDesk.exe --stop              :: 让已运行的实例干净退出
+dist\日常小助手.exe --selfcheck
+dist\日常小助手.exe --fetch flash
+dist\日常小助手.exe --no-window --port 8790
+dist\日常小助手.exe --stop              :: 让已运行的实例干净退出
 ```
 
 主要 API（仅监听 127.0.0.1）：`GET /api/state`、`GET|POST /api/config`、`POST /api/config/rollback`、
@@ -294,7 +311,7 @@ dist\GoldDesk.exe --stop              :: 让已运行的实例干净退出
 ```bat
 python -m pip install pyinstaller pywebview
 desktop\打包exe.bat
-:: 产物 dist\GoldDesk.exe
+:: 产物 dist\日常小助手.exe
 ```
 `desktop/GoldDesk.spec` 把 `engine/`、`server.py`、`launcher.py`、`desktop/ui/`、`GoldDesk.ico` 以及 pywebview / pythonnet / clr_loader 的数据文件与动态库
 全部打进单文件（WebView2 运行时用系统自带的，不打包）；运行期数据在 exe 同目录，不会写进临时解压目录。
@@ -302,7 +319,7 @@ desktop\打包exe.bat
 > 本版已移除 Android/APK 打包链路，`.buildtools/build_apk.py`、`setup_sdk.py` 与 `mobile/` 工程均已删除；
 > `.buildtools/downloads/` 残留的 JDK/SDK/Gradle 安装包只在旧 APK 构建时用到，可直接清掉释放空间。
 
-### Win7 兼容版（`dist\win7\GoldDesk.exe`）
+### Win7 兼容版（`dist\win7\日常小助手.exe`）
 
 主版用 Python 3.13 打包，Python 3.9 起已不支持 Windows 7，所以 Win7 版单独用 **Python 3.8.10** 打包（最后一个支持 Win7 的版本），规格文件 `desktop/GoldDesk-Win7.spec`，一键脚本 `desktop/打包exe-Win7.bat`。
 
@@ -352,8 +369,7 @@ Google News RSS 与 GDELT 在本网络超时或返回 429，已默认关闭、�
 
 **已知限制（v2 · 桌面单端）**：
 1. 银行报价需自备官方接口（Q1/Q9 未确认）；适配器已预留 `generic_json`。Au99.99 已接入（新浪行情），但它是交易所现货参考价，不是银行积存金成交价。
-2. 定时推送的「重启补发当日总结」目前只记录 `slot_fire` 与最后成功时间，未实现完整补发编排；
-   时点后的短窗口补发（默认 10 分钟）已实现。
+2. 「重启补发当日总结」已升级为启动后补生成最近 N 天（默认 2 天）：只用本机已存条目，不重新采集、不发旧邮件；若当天条目已被清理则无法凭空补出。时点后的短窗口补发（默认 10 分钟）仍然保留。
 3. 新闻摘要来自 RSS 自带描述，未调用模型做中文摘要（避免额外成本与幻觉风险）。
 4. exe 的无边框窗口依赖系统 **WebView2 运行时**（Win10/11 一般自带）；没有时自动回退到 Edge `--app` 窗口，此时窗口由浏览器自己管理（会有原生标题栏与 X），且无自绘窗口控制。
 7. 「金价详细走势」的国际金价没有稳定的免费分时源，「今日」一档展示近 7 日日 K 并如实标注；国内日 K 用沪金主力合约代表，与 Au99.99 现货相差数元。

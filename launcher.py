@@ -24,7 +24,7 @@ CANDIDATES = [
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
 ]
-TITLE_HINT = "黄金积存金助手"
+TITLE_HINT = "日常小助手"
 
 _APP_HWND = None
 _WIN32 = None
@@ -336,6 +336,8 @@ _WV = None             # pywebview.Window
 _WV_HOST = "edge"      # webview | edge
 _WV_RESTORE = None     # 最大化前的窗口矩形 (l, t, r, b)
 _WV_ZOOM = False       # 自管的最大化状态
+_WV_ALLOW_CLOSE = False
+_TRAY_HINTED = False
 
 
 def webview_available() -> bool:
@@ -394,6 +396,31 @@ def _wv_fill(on: bool):
         _WV_ZOOM = False
 
 
+def _tray_hint_once():
+    global _TRAY_HINTED
+    if _TRAY_HINTED:
+        return
+    _TRAY_HINTED = True
+    try:
+        import tray
+        tray.notify("日常小助手", "窗口已收进托盘，双击托盘图标可恢复；退出请用托盘菜单。")
+    except Exception:
+        pass
+
+
+def _wv_allow_close():
+    global _WV_ALLOW_CLOSE
+    _WV_ALLOW_CLOSE = True
+
+
+def _wv_closing():
+    """Alt+F4 / 系统关闭：隐藏到托盘而不是退出。托盘「退出程序」会先置允许关闭。"""
+    if _WV_ALLOW_CLOSE:
+        return True
+    _wv_action("hide")
+    return False
+
+
 def _wv_action(action: str) -> dict:
     """WebView2 宿主下的窗口动作（调用会自动切到 UI 线程执行）。"""
     if _WV is None:
@@ -414,6 +441,7 @@ def _wv_action(action: str) -> dict:
         if not hwnd:
             return {"ok": False, "message": "窗口尚未创建"}
         ctypes.windll.user32.ShowWindow(hwnd, 0)
+        _tray_hint_once()
         return {"ok": True}
     if action == "show":
         hwnd = _wv_hwnd()
@@ -429,7 +457,10 @@ def _wv_action(action: str) -> dict:
     if action == "maximize":
         _wv_fill(not zoomed)
         return {"ok": True, "maximized": not zoomed}
-    if action in ("close", "quit"):
+    if action == "close":
+        return _wv_action("hide")
+    if action in ("quit", "exit"):
+        _wv_allow_close()
         _WV.destroy()
         return {"ok": True}
     # caption / refresh / move 在 WebView2 宿主下由系统原生处理，无需宿主介入
@@ -533,7 +564,9 @@ def _wv_heal() -> bool:
 def open_webview_window(url: str, title: str, width: int = 1440, height: int = 900,
                         icon_path: str | None = None, data_dir: str | None = None):
     """在主线程创建 WebView2 无边框窗口并阻塞运行，窗口关闭后返回。"""
-    global _WV, _WV_HOST
+    global _WV, _WV_HOST, _WV_ALLOW_CLOSE, _TRAY_HINTED
+    _WV_ALLOW_CLOSE = False
+    _TRAY_HINTED = False
     import webview
     storage = os.path.join(data_dir, "webview2") if data_dir else None
     if storage:
@@ -560,6 +593,10 @@ def open_webview_window(url: str, title: str, width: int = 1440, height: int = 9
         title, url, width=width + fw, height=height + fh, frameless=True, easy_drag=False,
         shadow=True, text_select=True, zoomable=False, background_color="#FFFFFF", **kw)
     _WV_HOST = "webview"
+    try:
+        _WV.events.closing += _wv_closing
+    except Exception:
+        pass
     print("已打开 WebView2 无边框窗口：%s" % url, flush=True)
     webview.start(debug=False, private_mode=False, storage_path=storage, icon=icon_path)
     _WV = None

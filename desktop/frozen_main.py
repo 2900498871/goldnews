@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GoldDesk.exe 的 PyInstaller 入口（桌面端）。
+"""日常小助手.exe 的 PyInstaller 入口（桌面端）。
 
 与源码模式 desktop/run.py 的区别：
   * UI 资源随 exe 打进临时解压目录，持久化数据固定放在 exe 同目录的 data/；
@@ -34,14 +34,76 @@ def app_paths():
     return base, ui, data
 
 
+class _RotatingStream:
+    """stdout/stderr 落盘并按 10MB×5 轮转，避免长期运行无限增长。"""
+
+    def __init__(self, path: str, max_bytes: int = 10 * 1024 * 1024, backups: int = 5):
+        self.path = path
+        self.max_bytes = max_bytes
+        self.backups = backups
+        self._f = None
+        self._open()
+
+    def _open(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self._f = open(self.path, "a", encoding="utf-8", errors="replace", buffering=1)
+
+    def _rotate(self):
+        try:
+            self._f.close()
+        except Exception:
+            pass
+        for i in range(self.backups - 1, 0, -1):
+            src = "%s.%d" % (self.path, i)
+            dst = "%s.%d" % (self.path, i + 1)
+            if os.path.exists(src):
+                try:
+                    os.replace(src, dst)
+                except OSError:
+                    pass
+        try:
+            if os.path.exists(self.path):
+                os.replace(self.path, self.path + ".1")
+        except OSError:
+            pass
+        self._open()
+
+    def write(self, s):
+        try:
+            if self._f.tell() >= self.max_bytes:
+                self._rotate()
+        except Exception:
+            pass
+        if self._f:
+            self._f.write(s)
+        return len(s)
+
+    def flush(self):
+        try:
+            self._f.flush()
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self._f.close()
+        except Exception:
+            pass
+
+    def isatty(self):
+        return False
+
+    def fileno(self):
+        return self._f.fileno()
+
+
 def prepare_stdio(data_dir):
     """windowed 打包没有控制台，把 stdout/stderr 落到 data/stdout.log 便于排障。"""
     try:
         if getattr(sys, "frozen", False):
-            f = open(os.path.join(data_dir, "stdout.log"), "a",
-                     encoding="utf-8", errors="replace", buffering=1)
-            sys.stdout = f
-            sys.stderr = f
+            stream = _RotatingStream(os.path.join(data_dir, "stdout.log"))
+            sys.stdout = stream
+            sys.stderr = stream
         elif sys.stdout is not None:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -77,7 +139,7 @@ def main():
     from launcher import open_desktop_window   # noqa: E402
     from engine.monitor import selfcheck         # noqa: E402
 
-    ap = argparse.ArgumentParser(description="黄金积存金助手 · 桌面端独立实例")
+    ap = argparse.ArgumentParser(description="日常小助手 · 桌面端独立实例")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-window", action="store_true", help="只跑后台服务，不打开窗口")
@@ -99,7 +161,7 @@ def main():
     if not (a.selfcheck or a.fetch):
         try:
             from engine.single import ensure_single
-            if not ensure_single(a.port):
+            if not ensure_single(a.port, gui=not a.no_window):
                 print("检测到本端实例已在运行，已激活已有窗口。", flush=True)
                 return
         except Exception:
@@ -107,7 +169,12 @@ def main():
     if port_busy("127.0.0.1", a.port) and not (a.selfcheck or a.fetch):
         print("检测到本端实例已在运行，直接打开窗口：%s" % url)
         if not a.no_window:
-            open_desktop_window(url, "黄金积存金助手 v1.0", 1440, 900, icon_path=icon_path,
+            try:
+                from launcher import install_tray
+                install_tray(icon_path)
+            except Exception:
+                pass
+            open_desktop_window(url, "日常小助手", 1440, 900, icon_path=icon_path,
                                 data_dir=data_dir, profile_dir=profile)
         return
 
@@ -137,7 +204,7 @@ def main():
 
     print("桌面程序地址：%s" % url)
     print("本端数据目录：%s" % data_dir)
-    print("退出方式：界面顶栏「退出」按钮 / GoldDesk.exe --stop / 任务管理器结束进程")
+    print("退出方式：界面顶栏「退出」按钮 / 日常小助手.exe --stop / 任务管理器结束进程")
     if not a.no_window:
         # WebView2 窗口必须跑在主线程：后台服务放子线程，窗口关闭后再把服务停掉
         import time
@@ -152,7 +219,7 @@ def main():
             install_tray(icon_path)
         except Exception:
             pass
-        open_desktop_window(url, "黄金积存金助手 v1.0", 1440, 900, icon_path=icon_path,
+        open_desktop_window(url, "日常小助手", 1440, 900, icon_path=icon_path,
                             data_dir=data_dir, profile_dir=profile)
         print("应用窗口已关闭，后台服务同步停止。", flush=True)
         stop_http()

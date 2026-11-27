@@ -14,7 +14,7 @@ hidden = collect_submodules("engine") + ["server", "launcher",
     "webview.platforms.winforms", "webview.platforms.edgechromium",
     "clr_loader", "clr_loader.netfx"]
 binaries, datas = [], []
-for pkg in ("webview", "pythonnet", "clr_loader"):
+for pkg in ("webview", "pythonnet", "clr_loader", "docx"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -43,7 +43,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="GoldDesk",
+    name="日常小助手",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

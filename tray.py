@@ -11,6 +11,7 @@ WM_TRAY = 0x0400 + 20
 NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
 NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x1, 0x2, 0x4, 0x10
 WM_LBUTTONDBLCLK, WM_RBUTTONUP = 0x0203, 0x0205
+NIN_BALLOONUSERCLICK = 0x0405
 TPM_RETURNCMD, TPM_NONOTIFY = 0x0100, 0x0080
 
 
@@ -42,7 +43,7 @@ class _WNDCLASS(ctypes.Structure):
 
 
 class Tray:
-    def __init__(self, on_show, on_exit, icon_path: str = "", tip: str = "黄金积存金助手"):
+    def __init__(self, on_show, on_exit, icon_path: str = "", tip: str = "日常小助手"):
         self.on_show = on_show
         self.on_exit = on_exit
         self.icon_path = icon_path
@@ -82,6 +83,7 @@ class Tray:
         u.DestroyMenu.argtypes = [wintypes.HMENU]
         hinst = k.GetModuleHandleW(None)
         cls_name = "GoldDeskTrayWnd"
+        self._taskbar_msg = u.RegisterWindowMessageW("TaskbarCreated")
         wc = _WNDCLASS()
         wc.lpfnWndProc = WNDPROC(self._proc)
         wc.hInstance = hinst
@@ -104,6 +106,7 @@ class Tray:
         nid.hIcon = hicon
         nid.szTip = self.tip[:127]
         self._nid = nid
+        self._hicon = hicon
         u.Shell_NotifyIconW = sh.Shell_NotifyIconW
         u.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))
         self._ready.set()
@@ -116,8 +119,15 @@ class Tray:
 
     def _proc(self, hwnd, msg, wparam, lparam):
         u = ctypes.windll.user32
+        if getattr(self, "_taskbar_msg", 0) and msg == self._taskbar_msg:
+            # Explorer 重启后托盘区会清空，重新注册图标
+            try:
+                ctypes.windll.shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(self._nid))
+            except Exception:
+                pass
+            return 0
         if msg == WM_TRAY:
-            if lparam == WM_LBUTTONDBLCLK:
+            if lparam in (WM_LBUTTONDBLCLK, NIN_BALLOONUSERCLICK):
                 self._safe(self.on_show)
             elif lparam == WM_RBUTTONUP:
                 menu = u.CreatePopupMenu()
@@ -151,7 +161,7 @@ class Tray:
         try:
             nid = self._nid
             nid.uFlags = NIF_INFO
-            nid.szInfoTitle = (title or "黄金积存金助手")[:63]
+            nid.szInfoTitle = (title or "日常小助手")[:63]
             nid.szInfo = (text or "")[:255]
             nid.dwInfoFlags = 0x1   # NIIF_INFO
             ctypes.windll.shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))

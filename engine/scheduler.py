@@ -30,6 +30,9 @@ class Scheduler:
         self.next_push = ""
         self._daily_fails = {}        # 时点 key → 已失败次数（只自动重试一次）
         self._alert_last = {}         # 提醒规则 id → 上次命中时间
+        self._catchup_thread = None
+        self.current_job = ""           # 当前正在写的文档任务（任务中心展示）
+        self._daily_busy = threading.Event()   # 日报/汇总/补生成互斥，避免并发写同一批文档
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -39,10 +42,208 @@ class Scheduler:
         self.thread.start()
         self.log.info("调度器已启动（%s · %s）", self.cfg.get().get("app_kind"), self.cfg.instance_id)
         self.db.event("info", "调度器启动")
+        self._catchup_thread = threading.Thread(target=self._catchup_past, name="golddesk-catchup",
+                                                daemon=True)
+        self._catchup_thread.start()
 
     def stop(self):
         self.stop_event.set()
         self.db.event("info", "调度器停止")
+
+    def snapshot(self) -> dict:
+        """任务中心：线程状态、即将执行、最近执行与失败详情。"""
+        cfg = self.cfg.get()
+        now = now_bj()
+        plan = cfg.get("daily_all") or {}
+        jobs = []
+        if plan.get("enabled"):
+            per = "/".join(DIGEST_PERIOD_CN.get(p, p) for p in digest_periods(plan)) or "周/月"
+            jobs.append({"label": "每日内容", "kind": "daily_all",
+                         "time": plan.get("time") or "20:30",
+                         "desc": "生成每日新闻、每日资讯、每日军事新闻三份文档，并合成发送合并邮件"})
+            jobs.append({"label": "每日综合汇总", "kind": "digest_all",
+                         "time": plan.get("digest_time") or "21:30",
+                         "desc": "按%s周期生成综合汇总文档并发送邮件" % per})
+        else:
+            for kind in ("news", "brief", "mil"):
+                sec = cfg.get({"news": "daily", "brief": "brief", "mil": "mil"}.get(kind, kind)) or {}
+                if sec.get("enabled"):
+                    jobs.append({"label": {"news": "每日新闻", "brief": "每日资讯",
+                                            "mil": "每日军事新闻"}[kind],
+                                 "kind": kind, "time": sec.get("time") or "—",
+                                 "desc": "生成该板块当日文档，并按周期生成汇总邮件"})
+        # 即时数据只取一次，后面失败、最近执行、上次状态共用
+        try:
+            recent = self.db.recent_slots(30)
+        except Exception:
+            recent = []
+        try:
+            task_runs = self.db.recent_tasks(30)
+        except Exception:
+            task_runs = []
+        try:
+            failed_tasks_raw = self.db.failed_tasks(100)
+        except Exception:
+            failed_tasks_raw = [r for r in task_runs
+                                if str(r.get("status") or "") in ("error", "failed")]
+        try:
+            failed_slots_raw = self.db.failed_slots(100)
+        except Exception:
+            failed_slots_raw = [s for s in recent if str(s.get("status") or "") == "failed"]
+
+        def last_slot(prefix):
+            for s in recent:
+                if str(s.get("fire_key") or "").startswith(prefix):
+                    return s
+            return None
+
+        next_runs = []
+        for job in jobs:
+            hhmm = job["time"]
+            if not hhmm_valid(hhmm):
+                continue
+            t = now.replace(hour=int(hhmm[:2]), minute=int(hhmm[3:]), second=0, microsecond=0)
+            if t <= now:
+                t += timedelta(days=1)
+            prefix = {"daily_all": "daily|all|", "digest_all": "digest|all|"}.get(job["kind"], "")
+            last = last_slot(prefix) if prefix else None
+            next_runs.append({
+                "label": job["label"], "kind": job["kind"], "time": hhmm,
+                "desc": job["desc"], "source": "daily",
+                "at": t.strftime("%Y-%m-%d %H:%M"),
+                "date": t.strftime("%Y-%m-%d"),
+                "tomorrow": t.date() > now.date(),
+                "seconds": max(0, int((t - now).total_seconds())),
+                "last_status": (last or {}).get("status", ""),
+                "last_at": (last or {}).get("fired_at", ""),
+            })
+        # 自定义推送时点也属于“任务”，只展示最近一次即将触发的那条
+        sch = cfg.get("push_schedule") or {}
+        for slot in sch.get("slots") or []:
+            if not slot.get("enabled") or not cfg.get("push_master_switch", True):
+                continue
+            hhmm = str(slot.get("time") or "")
+            if not hhmm_valid(hhmm) or "mail" not in (slot.get("channels") or []):
+                continue
+            sid = str(slot.get("id") or hhmm)
+            last = next((s for s in recent if "|%s|" % sid in str(s.get("fire_key") or "")), None)
+            t = now.replace(hour=int(hhmm[:2]), minute=int(hhmm[3:]), second=0, microsecond=0)
+            if t <= now:
+                t += timedelta(days=1)
+            kind = "daily_summary" if slot.get("type") in ("daily_summary", "both") else "flash"
+            next_runs.append({
+                "label": "自定义推送 %s" % hhmm,
+                "kind": "push:%s" % sid,
+                "time": hhmm, "source": "slot", "at": t.strftime("%Y-%m-%d %H:%M"),
+                "date": t.strftime("%Y-%m-%d"), "tomorrow": t.date() > now.date(),
+                "seconds": max(0, int((t - now).total_seconds())),
+                "desc": "按配置发送%s并检查到价提醒" % ("日报汇总" if kind == "daily_summary" else "价格快报"),
+                "last_status": (last or {}).get("status", ""),
+                "last_at": (last or {}).get("fired_at", ""),
+            })
+        next_runs.sort(key=lambda x: x["at"])
+        upcoming = next_runs[:8]
+
+        # 失败记录：任务运行错误 + 时点重试仍失败，保留原始原因
+        def task_label(name):
+            n = str(name or "")
+            mapping = {"daily:news": "每日新闻文档", "daily:brief": "每日资讯文档",
+                       "daily:mil": "每日军事新闻文档", "daily:all": "每日内容",
+                       "digest:news": "每日新闻汇总", "digest:brief": "每日资讯汇总",
+                       "digest:mil": "每日军事新闻汇总", "digest:all": "每日综合汇总",
+                       "pipeline:prices": "价格采集",
+                       "pipeline:news": "资讯采集",
+                       "pipeline:flash": "价格快报",
+                       "pipeline:daily_summary": "每日综合汇总",
+                       "pipeline:full": "全量任务"}
+            return mapping.get(n) or mapping.get(n.replace("_", ":")) or n or "未命名任务"
+
+        def slot_label(key):
+            k = str(key or "")
+            if k.startswith("daily|all|"):
+                return "每日内容（三份文档）"
+            if k.startswith("digest|all|"):
+                return "每日综合汇总（时点）"
+            if k.startswith("catchup|"):
+                return "跨天补生成"
+            if k.startswith("daily|"):
+                return "每日文档（时点）"
+            if k.startswith("digest|"):
+                return "周期汇总（时点）"
+            return k or "定时任务"
+
+        failures = []
+        for r in failed_tasks_raw:
+            status = str(r.get("status") or "")
+            if status in ("error", "failed") or (r.get("error") and status != "ok"):
+                failures.append({
+                    "source": "task", "name": task_label(r.get("task_name")),
+                    "at": r.get("finished_at") or r.get("started_at") or "",
+                    "status": status or "error", "trigger": r.get("trigger_source") or "",
+                    "error": r.get("error") or "任务返回错误，详情见运行日志",
+                    "latency_ms": r.get("latency_ms") or 0, "key": "",
+                })
+        for s in failed_slots_raw:
+            failures.append({
+                "source": "slot", "name": slot_label(s.get("fire_key")),
+                "at": s.get("fired_at") or "", "status": "failed",
+                "trigger": "scheduled", "error": "自动重试后仍失败，详情见运行日志",
+                "latency_ms": 0, "key": s.get("fire_key") or "",
+            })
+        failures.sort(key=lambda x: str(x.get("at") or ""), reverse=True)
+        # 最近任务补上中文名称，界面不用再解析内部 task_name
+        for r in task_runs:
+            r["name_cn"] = task_label(r.get("task_name"))
+
+        return {"ok": True, "running": bool(self.thread and self.thread.is_alive()),
+                "daily_running": bool(self.daily_thread and self.daily_thread.is_alive()),
+                "catchup_running": bool(self._catchup_thread and self._catchup_thread.is_alive()),
+                "busy": bool(self._daily_busy.is_set()),
+                "current_job": self.current_job or "",
+                "next": next_runs, "upcoming": upcoming, "next_push": self._next_push(cfg),
+                "recent_slots": recent, "recent_tasks": task_runs,
+                "failures": failures, "fails": dict(self._daily_fails),
+                "now": now.strftime("%Y-%m-%d %H:%M:%S")}
+
+    def _catchup_past(self):
+        """启动后补生成最近 N 天缺失的日报：只用本机已存条目，不发旧邮件。"""
+        if not self.daily:
+            return
+        acquired = False
+        try:
+            import time
+            time.sleep(3)
+            cfg = self.cfg.get()
+            plan = cfg.get("daily_all") or {}
+            if not plan.get("enabled"):
+                return
+            days = int(plan.get("catchup_days", 2) or 0)
+            if days <= 0:
+                return
+            if self._daily_busy.is_set():
+                return
+            self._daily_busy.set()
+            acquired = True
+            today = now_bj().date()
+            for offset in range(1, days + 1):
+                day = (today - timedelta(days=offset)).isoformat()
+                key = "catchup|all|%s" % day
+                if self.db.slot_fired(key):
+                    continue
+                if self.daily_thread and self.daily_thread.is_alive():
+                    return
+                r = self.daily.catchup_day(day)
+                if r.get("ok"):
+                    self.db.mark_slot_fired(key, "done")
+                    self.db.event("info", "跨天补生成 %s：%s" % (day, r.get("message") or "完成"))
+                else:
+                    self.db.mark_slot_fired(key, "no_data")
+                    self.log.info("跨天补生成 %s 跳过：%s", day, r.get("message") or "无本机条目")
+        except Exception as e:
+            self.log.warning("跨天补生成失败：%s", str(e)[:160])
+        finally:
+            if acquired:
+                self._daily_busy.clear()
 
     def _reload_config(self):
         try:
@@ -205,52 +406,68 @@ class Scheduler:
                         pending.append((("digest", kind, per), key))
         if not pending:
             return
-        if self.daily_thread and self.daily_thread.is_alive():
+        if self._daily_busy.is_set() or (self.daily_thread and self.daily_thread.is_alive()):
             self.log.info("每日文档任务仍在运行，本轮跳过：%s", [j for j, _ in pending])
             return
+        self._daily_busy.set()
 
         def work():
-            for job, key in pending:
-                self.db.mark_slot_fired(key, "running")
-                try:
+            try:
+                for job, key in pending:
+                    self.db.mark_slot_fired(key, "running")
                     if job[0] == "day_all":
-                        r = self.daily.run_all_day(trigger="scheduled")
-                        if not r.get("ok"):
-                            raise RuntimeError("有日报生成失败")
-                        self._notify("每日内容已生成", "%d/3 份文档%s" % (
-                            sum(1 for x in (r.get("results") or {}).values() if x.get("ok")),
-                            "，合并邮件已发送" if (r.get("delivery") or {}).get("ok") else ""))
+                        self.current_job = "每日内容（三份文档）"
                     elif job[0] == "digest_all":
-                        r = self.daily.run_all_digest(trigger="scheduled", period=job[1])
-                        if r.get("not_due"):
-                            self.db.event("info", "每日综合的%s汇总未到期，本次不生成" % (
-                                DIGEST_PERIOD_CN.get(job[1], job[1])))
-                        elif r.get("ok"):
-                            self._notify("每日综合汇总已生成", r.get("label") or job[1])
+                        self.current_job = "每日综合汇总（%s）" % DIGEST_PERIOD_CN.get(job[1], job[1])
                     elif job[0] == "day":
-                        r = self.daily.run_day(job[1], trigger="scheduled")
-                        if not r.get("ok"):
-                            raise RuntimeError(str(r.get("message") or "生成失败"))
+                        self.current_job = "%s文档" % {"news": "每日新闻", "brief": "每日资讯",
+                                                        "mil": "每日军事新闻"}.get(job[1], job[1])
                     else:
-                        _, kind, per = job
-                        r = self.daily.run_digest(kind, trigger="scheduled", period=per)
-                        if r.get("not_due"):
-                            self.db.event("info", "%s 的%s汇总未到期，本次不生成" % (
-                                {"news": "每日新闻", "brief": "每日资讯", "mil": "每日军事新闻"}.get(kind, kind),
-                                DIGEST_PERIOD_CN.get(per, per)))
-                    self.db.mark_slot_fired(key, "done")
-                    self._daily_fails.pop(key, None)
-                except Exception as e:
-                    # 第一次失败释放标记，下一轮自动重试；第二次仍失败则本日不再反复跑
-                    if self._daily_fails.get(key, 0) <= 0:
-                        self._daily_fails[key] = 1
-                        self.db.clear_slot_fired(key)
-                        self.db.event("warn", "每日文档任务失败（%s），稍后自动重试一次：%s" % (
-                            "/".join(str(x) for x in job), str(e)[:160]))
-                    else:
-                        self.db.mark_slot_fired(key, "failed")
-                        self.db.event("error", "每日文档任务重试仍失败（%s）：%s" % (
-                            "/".join(str(x) for x in job), str(e)[:160]))
+                        self.current_job = "%s%s汇总" % (
+                            {"news": "每日新闻", "brief": "每日资讯", "mil": "每日军事新闻"}.get(job[1], job[1]),
+                            DIGEST_PERIOD_CN.get(job[2], job[2]))
+                    try:
+                        if job[0] == "day_all":
+                            r = self.daily.run_all_day(trigger="scheduled")
+                            if not r.get("ok"):
+                                raise RuntimeError("有日报生成失败")
+                            self._notify("每日内容已生成", "%d/3 份文档%s" % (
+                                sum(1 for x in (r.get("results") or {}).values() if x.get("ok")),
+                                "，合并邮件已发送" if (r.get("delivery") or {}).get("ok") else ""))
+                        elif job[0] == "digest_all":
+                            r = self.daily.run_all_digest(trigger="scheduled", period=job[1])
+                            if r.get("not_due"):
+                                self.db.event("info", "每日综合的%s汇总未到期，本次不生成" % (
+                                    DIGEST_PERIOD_CN.get(job[1], job[1])))
+                            elif r.get("ok"):
+                                self._notify("每日综合汇总已生成", r.get("label") or job[1])
+                        elif job[0] == "day":
+                            r = self.daily.run_day(job[1], trigger="scheduled")
+                            if not r.get("ok"):
+                                raise RuntimeError(str(r.get("message") or "生成失败"))
+                        else:
+                            _, kind, per = job
+                            r = self.daily.run_digest(kind, trigger="scheduled", period=per)
+                            if r.get("not_due"):
+                                self.db.event("info", "%s 的%s汇总未到期，本次不生成" % (
+                                    {"news": "每日新闻", "brief": "每日资讯", "mil": "每日军事新闻"}.get(kind, kind),
+                                    DIGEST_PERIOD_CN.get(per, per)))
+                        self.db.mark_slot_fired(key, "done")
+                        self._daily_fails.pop(key, None)
+                    except Exception as e:
+                        # 第一次失败释放标记，下一轮自动重试；第二次仍失败则本日不再反复跑
+                        if self._daily_fails.get(key, 0) <= 0:
+                            self._daily_fails[key] = 1
+                            self.db.clear_slot_fired(key)
+                            self.db.event("warn", "每日文档任务失败（%s），稍后自动重试一次：%s" % (
+                                "/".join(str(x) for x in job), str(e)[:160]))
+                        else:
+                            self.db.mark_slot_fired(key, "failed")
+                            self.db.event("error", "每日文档任务重试仍失败（%s）：%s" % (
+                                "/".join(str(x) for x in job), str(e)[:160]))
+            finally:
+                self.current_job = ""
+                self._daily_busy.clear()
 
         self.daily_thread = threading.Thread(target=work, name="golddesk-daily", daemon=True)
         self.daily_thread.start()

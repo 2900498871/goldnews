@@ -245,14 +245,24 @@ class Analyzer:
         self.db = db
         self.log = logger
 
-    def _budget_ok(self) -> tuple[bool, str]:
+    def _budget_ok(self, daily: bool = False) -> tuple[bool, str]:
         cfg = self.cfg_store.get()["deepseek"]
         u = self.db.usage_today()
-        if u["calls"] >= cfg["max_calls_per_day"]:
-            return False, "本端今日调用次数已达上限 %d" % cfg["max_calls_per_day"]
+        max_calls = int(cfg.get("max_calls_per_day", 40))
+        max_tokens = int(cfg.get("daily_token_budget", 200000))
+        reserve_calls = 0 if daily else int(cfg.get("reserved_calls_for_daily", 0) or 0)
+        reserve_tokens = 0 if daily else int(cfg.get("reserved_tokens_for_daily", 0) or 0)
+        call_limit = max(1, max_calls - reserve_calls)
+        token_limit = max(1, max_tokens - reserve_tokens)
+        if u["calls"] >= call_limit:
+            return False, ("本端今日调用次数已达上限 %d（其中为每日文档预留 %d 次）"
+                           % (call_limit, reserve_calls) if reserve_calls else
+                           "本端今日调用次数已达上限 %d" % max_calls)
         used = (u["prompt_tokens"] or 0) + (u["completion_tokens"] or 0)
-        if used >= cfg["daily_token_budget"]:
-            return False, "本端今日 token 已达预算 %d" % cfg["daily_token_budget"]
+        if used >= token_limit:
+            return False, ("本端今日 token 已达预算 %d（其中为每日文档预留 %d）"
+                           % (token_limit, reserve_tokens) if reserve_tokens else
+                           "本端今日 token 已达预算 %d" % max_tokens)
         return True, ""
 
     def test_connection(self) -> dict:
@@ -288,7 +298,7 @@ class Analyzer:
             return {"ok": False, "message": redact(str(e)[:300], [key])}
 
     def summarize(self, system: str, user: str, max_tokens: int = 1600,
-                  force: bool = False) -> dict:
+                  force: bool = False, daily: bool = False) -> dict:
         """通用文本归纳（每日新闻总结 / 周期汇总）。
 
         返回 {ok, text, reason, usage}。计入本端调用次数与 token 预算；
@@ -299,7 +309,7 @@ class Analyzer:
         key = self.cfg_store.secret("deepseek.api_key")
         if not key:
             return {"ok": False, "reason": "未配置 DeepSeek API Key"}
-        ok, why = self._budget_ok()
+        ok, why = self._budget_ok(daily=daily)
         if not ok and not force:
             return {"ok": False, "reason": why}
         payload = build_payload(ds, ds["model_flash"], [

@@ -4,7 +4,7 @@
 在 v2/ 目录执行（必须用 Python 3.8 + PyInstaller 5.13.1 的虚拟环境）：
   C:\SoftWare\Python38\venv-golddesk\Scripts\python.exe -X utf8 -m PyInstaller --noconfirm --clean ^
       --distpath dist\win7 --workpath build\win7 desktop\GoldDesk-Win7.spec
-产物：dist\win7\GoldDesk.exe（Python 3.8.10 运行时，可在 Windows 7 SP1 上运行）。
+产物：dist\win7\日常小助手.exe（Python 3.8.10 运行时，可在 Windows 7 SP1 上运行）。
 """
 import os
 from PyInstaller.utils.hooks import collect_submodules, collect_all
@@ -15,7 +15,7 @@ hidden = collect_submodules("engine") + ["server", "launcher",
     "webview.platforms.winforms", "webview.platforms.edgechromium",
     "clr_loader", "clr_loader.netfx"]
 binaries, datas = [], []
-for pkg in ("webview", "pythonnet", "clr_loader"):
+for pkg in ("webview", "pythonnet", "clr_loader", "docx"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -43,7 +43,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="GoldDesk",
+    name="日常小助手",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

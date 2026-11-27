@@ -6,10 +6,12 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
 import mimetypes
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -29,6 +31,30 @@ from engine.scheduler import Scheduler  # noqa: E402
 from engine.util import DISCLAIMER, get_logger, iso_bj  # noqa: E402
 
 
+def _api_token(data_dir: str, enabled: bool) -> str:
+    """非回环绑定才启用 API 令牌；令牌落盘但不进日志。"""
+    if not enabled:
+        return ""
+    path = os.path.join(data_dir, "api_token.txt")
+    try:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                tok = f.read().strip()
+            if tok:
+                return tok
+        tok = secrets.token_urlsafe(24)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(tok)
+        return tok
+    except OSError:
+        return secrets.token_urlsafe(24)
+
+
+def _loopback(host: str) -> bool:
+    return str(host or "").strip().lower() in ("127.0.0.1", "localhost", "::1")
+
+
 class Instance:
     def __init__(self, root: str, port: int, host: str = "127.0.0.1",
                  dir_name: str = "desktop", data_dir: str | None = None,
@@ -43,6 +69,14 @@ class Instance:
         self.data_dir = os.path.abspath(data_dir or os.path.join(self.root, self.dir_name, "data"))
         self.ui_dir = os.path.abspath(ui_dir or os.path.join(self.root, self.dir_name, "ui"))
         os.makedirs(self.data_dir, exist_ok=True)
+        self.api_token = _api_token(self.data_dir, not _loopback(host))
+        try:
+            from engine.export import apply_pending_restore
+            restored = apply_pending_restore(self.data_dir)
+            if restored:
+                print("已应用暂存的备份恢复，原数据保留在 %s" % restored.get("pre_restore"))
+        except Exception as e:
+            print("应用暂存恢复失败：%s: %s" % (type(e).__name__, e))
         self.log = get_logger("golddesk-" + self.app_kind,
                               os.path.join(self.data_dir, "app.log"))
         self.cfg = ConfigStore(self.data_dir)
@@ -88,7 +122,7 @@ def _json(handler, data, code=200):
 
 def make_handler(inst: Instance):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "GoldDesk/1.0"
+        server_version = "DailyAssistant/1.0"
 
         def log_message(self, fmt, *args):
             # 不把带 query 的 URL 打进日志，避免任何敏感串落盘
@@ -104,6 +138,10 @@ def make_handler(inst: Instance):
                 ctype += "; charset=utf-8"
             with open(path, "rb") as f:
                 body = f.read()
+            if rel == "index.html" and inst.api_token and self.client_address[0] in (
+                    "127.0.0.1", "::1", "::ffff:127.0.0.1"):
+                body = body.replace(b'"__GD_TOKEN__"',
+                                    b'"' + inst.api_token.encode("utf-8") + b'"')
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
@@ -120,9 +158,24 @@ def make_handler(inst: Instance):
             except Exception:
                 return {}
 
+        def _token_ok(self, q: dict | None = None, body: dict | None = None) -> bool:
+            if not inst.api_token:
+                return True
+            supplied = (self.headers.get("X-GoldDesk-Token") or "").strip()
+            if not supplied and q:
+                supplied = (q.get("token") or [""])[0]
+            if not supplied and body:
+                supplied = str(body.get("token") or "")
+            return bool(supplied) and hmac.compare_digest(supplied, inst.api_token)
+
+        def _deny_token(self):
+            _json(self, {"ok": False, "message": "需要访问令牌：请在启动日志给出的带 token 链接打开"}, 401)
+
         def do_GET(self):
             u = urllib.parse.urlsplit(self.path)
             p, q = u.path, urllib.parse.parse_qs(u.query)
+            if p.startswith("/api/") and p != "/api/health" and not self._token_ok(q=q):
+                return self._deny_token()
             try:
                 if p in ("/", "/index.html"):
                     return self._static("index.html")
@@ -143,6 +196,11 @@ def make_handler(inst: Instance):
                     return _json(self, self._daily_get((q.get("kind") or ["news"])[0], q))
                 if p == "/api/daily/progress":
                     return _json(self, inst.daily.progress_state())
+                if p == "/api/scheduler/status":
+                    return _json(self, inst.scheduler.snapshot())
+                if p == "/api/export/backups":
+                    from engine.export import list_backups
+                    return _json(self, list_backups(inst))
                 if p == "/api/daily/docs":
                     return _json(self, self._daily_docs(q))
                 if p == "/api/daily/article":
@@ -169,6 +227,8 @@ def make_handler(inst: Instance):
             u = urllib.parse.urlsplit(self.path)
             p = u.path
             body = self._body()
+            if p.startswith("/api/") and not self._token_ok(q=urllib.parse.parse_qs(u.query), body=body):
+                return self._deny_token()
             try:
                 # 仅允许本机调用：给无控制台的 exe 提供干净退出入口
                 if p in ("/api/shutdown", "/api/window"):
@@ -185,14 +245,14 @@ def make_handler(inst: Instance):
                         from launcher import window_action, notify
                         act = str(body.get("action") or "info")
                         if act == "notify":
-                            r = {"ok": notify(str(body.get("title") or "黄金积存金助手"),
+                            r = {"ok": notify(str(body.get("title") or "日常小助手"),
                                               str(body.get("text") or ""))}
                         else:
                             r = window_action(act, float(body.get("dx") or 0),
                                               float(body.get("dy") or 0),
                                               float(body.get("cap") or 0),
                                               float(body.get("dpr") or 0))
-                        if act in ("close", "quit") and r.get("ok"):
+                        if act == "quit" and r.get("ok"):
                             threading.Timer(0.8, self.server.shutdown).start()
                             inst.log.info("收到退出指令，窗口与后台服务同步停止")
                     except Exception as e:
@@ -242,6 +302,13 @@ def make_handler(inst: Instance):
                                                          send_mail=bool(body.get("send_mail")), force=True))
                 if p == "/api/schedule":
                     return _json(self, self._schedule_op(body))
+                if p == "/api/scheduler/retry":
+                    key = str(body.get("key") or "").strip()
+                    if not key or len(key) > 120:
+                        return _json(self, {"ok": False, "message": "缺少时点 key"}, 400)
+                    inst.db.clear_slot_fired(key)
+                    inst.scheduler._daily_fails.pop(key, None)
+                    return _json(self, {"ok": True, "message": "已清除该时点，下一轮调度会重新尝试"})
                 if p == "/api/autostart":
                     from engine.autostart import set_enabled as _as_set
                     r = _as_set(bool(body.get("enabled")))
@@ -275,9 +342,20 @@ def make_handler(inst: Instance):
                         mode="digest" if body.get("mode") == "digest" else "day",
                         period=body.get("period")))
                 if p == "/api/export/daily":
-                    from engine.export import export_daily_month
-                    return _json(self, export_daily_month(
-                        inst, body.get("kind") or "news", body.get("month") or ""))
+                    from engine.export import export_daily_range
+                    return _json(self, export_daily_range(
+                        inst, body.get("kind") or "news",
+                        body.get("start") or "", body.get("end") or ""))
+                if p == "/api/export/backups":
+                    from engine.export import list_backups
+                    return _json(self, list_backups(inst))
+                if p == "/api/export/restore":
+                    from engine.export import stage_restore
+                    return _json(self, stage_restore(
+                        inst, body.get("name") or "", body.get("password") or ""))
+                if p == "/api/diagnostics":
+                    from engine.diagnostics import diagnostics_zip
+                    return _json(self, diagnostics_zip(inst))
                 if p == "/api/export/doc":
                     from engine.export import export_doc
                     return _json(self, export_doc(inst, body.get("path") or "",
@@ -287,7 +365,8 @@ def make_handler(inst: Instance):
                     return _json(self, export_trades_csv(inst))
                 if p == "/api/export/backup":
                     from engine.export import backup_zip
-                    return _json(self, backup_zip(inst))
+                    return _json(self, backup_zip(
+                        inst, bool(body.get("include_secrets")), body.get("password") or ""))
                 if p == "/api/export/open":
                     from engine.export import open_path
                     return _json(self, open_path(inst, body.get("path") or ""))
@@ -357,33 +436,62 @@ def make_handler(inst: Instance):
             return inst.daily.state(kind)
 
         def _daily_docs(self, q: dict) -> dict:
-            """每日文档/汇总查询：按月份、关键词过滤，供日历与搜索使用。"""
+            """每日文档/汇总查询：按月份或日期区间、关键词（摘要/标题/正文）过滤。"""
             kind = (q.get("kind") or ["news"])[0]
             if kind not in ("news", "brief", "mil"):
                 kind = "news"
             month = (q.get("month") or [""])[0].strip()
-            text = (q.get("q") or [""])[0].strip()
-            start = end = None
+            start = (q.get("start") or [""])[0].strip()
+            end = (q.get("end") or [""])[0].strip()
             if month:
-                start, end = month + "-01", month + "-31"
+                start = start or month + "-01"
+                end = end or month + "-31"
+            text = (q.get("q") or [""])[0].strip()
             where, args = "kind=?", [kind]
             if start:
-                where += " AND day>=? AND day<=?"
-                args += [start, end]
-            if text:
-                where += " AND (summary_md LIKE ? OR day LIKE ?)"
-                args += ["%" + text + "%", "%" + text + "%"]
+                where += " AND day>=?"
+                args.append(start)
+            if end:
+                where += " AND day<=?"
+                args.append(end)
             rows = inst.db.rows(
                 "SELECT day,path,ai_available,summary_md,counts_json,generated_at FROM daily_doc "
                 "WHERE %s ORDER BY day DESC LIMIT 400" % where, tuple(args))
+            title_days = set()
+            if text:
+                trows = inst.db.rows(
+                    "SELECT DISTINCT day FROM daily_item WHERE kind=? AND day>=? AND day<=? "
+                    "AND (title LIKE ? OR summary LIKE ?) LIMIT 400",
+                    (kind, start or "0000-00-00", end or "9999-99-99",
+                     "%" + text + "%", "%" + text + "%"))
+                title_days = {r["day"] for r in trows}
+            root = os.path.abspath(inst.daily.doc_root())
             out = []
             for r in rows:
                 d = dict(r)
-                d["snippet"] = re.sub(r"[#>*`\-]+", "", (d.pop("summary_md", "") or ""))[:120].strip()
+                summary = d.pop("summary_md", "") or ""
+                raw = re.sub(r"[#>*`\-]+", "", summary)
+                hit = (not text) or (text in summary) or (text in d["day"]) or (d["day"] in title_days)
+                snippet = raw[:120].strip()
+                if text and not hit and len(text) >= 2:
+                    path = os.path.abspath(d.get("path") or "")
+                    if path.startswith(root + os.sep) and os.path.isfile(path) and os.path.getsize(path) <= 12 * 1024 * 1024:
+                        try:
+                            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                                content = f.read()
+                            pos = content.find(text)
+                            if pos >= 0:
+                                hit = True
+                                snippet = re.sub(r"[#>*`\-]+", "", content[max(0, pos - 40):pos + 100]).strip()
+                        except OSError:
+                            pass
+                if not hit:
+                    continue
+                d["snippet"] = snippet or "标题匹配"
                 out.append(d)
             dg = inst.db.recent_digests(kind, 60)
             return {"ok": True, "kind": kind, "month": month, "q": text,
-                    "docs": out, "digests": [dict(x) for x in dg]}
+                    "start": start, "end": end, "docs": out, "digests": [dict(x) for x in dg]}
 
         def _schedule_op(self, body: dict) -> dict:
             cfg = inst.cfg.get()
@@ -500,13 +608,27 @@ def serve(inst: Instance):
     httpd = ThreadingHTTPServer((inst.host, inst.port), make_handler(inst))
     httpd.daemon_threads = True
     HTTPD = httpd
-    print("GoldDesk 桌面端已启动: http://%s:%d  (instance=%s)"
+    print("日常小助手 已启动: http://%s:%d  (instance=%s)"
           % (inst.host, inst.port, inst.cfg.instance_id))
+    if inst.api_token:
+        shown = "127.0.0.1" if inst.host in ("0.0.0.0", "::") else inst.host
+        print("局域网访问地址（需带令牌）: http://%s:%d/?token=%s" %
+              (shown, inst.port, inst.api_token))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         HTTPD = None
+        try:
+            httpd.server_close()
+        except Exception:
+            pass
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        # serve_forever 只会在退出请求后返回；显式结束进程，避免残留非 daemon 线程锁住 exe
+        os._exit(0)
         inst.scheduler.stop()
         httpd.server_close()

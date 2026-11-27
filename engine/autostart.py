@@ -9,7 +9,8 @@ import os
 import sys
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-NAME = "GoldDesk"
+NAME = "日常小助手"
+OLD_NAME = "GoldDesk"
 
 
 def _root() -> str:
@@ -29,6 +30,31 @@ def current_command() -> str:
     return ""
 
 
+def _migrate_legacy():
+    """把旧版 GoldDesk 的 Run 项迁移到「日常小助手」，避免改名后开机启动失效。"""
+    if os.name != "nt":
+        return
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            old, _typ = winreg.QueryValueEx(k, OLD_NAME)
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+    cmd = current_command() or str(old or "")
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            if cmd:
+                winreg.SetValueEx(k, NAME, 0, winreg.REG_SZ, cmd)
+            try:
+                winreg.DeleteValue(k, OLD_NAME)
+            except FileNotFoundError:
+                pass
+    except OSError:
+        pass
+
+
 def status() -> dict:
     out = {"supported": os.name == "nt", "enabled": False, "command": "",
            "frozen": bool(getattr(sys, "frozen", False)), "stale": False, "name": NAME}
@@ -36,6 +62,8 @@ def status() -> dict:
         out["message"] = "仅 Windows 支持开机自启动"
         return out
     import winreg
+    if os.name == "nt":
+        _migrate_legacy()
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
             val, _typ = winreg.QueryValueEx(k, NAME)
@@ -58,11 +86,12 @@ def set_enabled(on: bool) -> dict:
     if os.name != "nt":
         return {"ok": False, "message": "仅 Windows 支持开机自启动"}
     import winreg
+    _migrate_legacy()
     try:
         if on:
             cmd = current_command()
             if not cmd:
-                return {"ok": False, "message": "无法定位可启动程序，请使用打包版 GoldDesk.exe"}
+                return {"ok": False, "message": "无法定位可启动程序，请使用打包版 日常小助手.exe"}
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
                 winreg.SetValueEx(k, NAME, 0, winreg.REG_SZ, cmd)
         else:

@@ -153,7 +153,7 @@ MIL_DIGEST_SYSTEM = """你是军事新闻编辑助理。下面是某一段时间
 3. 保持中立，只转述事实，不评价政治制度、不褒贬国家与军队。
 4. 全文 600–1000 字，直接输出正文，不要开场白和结尾客套。"""
 
-COMBINED_DAY_SYSTEM = """你是「黄金积存金助手」的编辑，读者是一位只做黄金积存（银行积存金定投与买卖）的个人投资者。
+COMBINED_DAY_SYSTEM = """你是「日常小助手」的编辑，读者是一位只做黄金积存（银行积存金定投与买卖）的个人投资者。
 材料是今天已经分别生成的三份日报 AI 总结：每日新闻、每日资讯、每日军事新闻。请把它们整合成**一封**给读者看的邮件正文（Markdown）。规则：
 1. 只依据材料归纳，不编造、不补充材料之外的信息；三份材料都没提到的不写。英文内容用中文转述。
 2. 结构固定：
@@ -171,7 +171,7 @@ COMBINED_DAY_SYSTEM = """你是「黄金积存金助手」的编辑，读者是�
 3. 三个板块不重复同一条内容；同一事件只出现在最相关的一节。
 4. 全文 700–1100 字，直接输出正文，不要开场白和结尾客套。"""
 
-COMBINED_DIGEST_SYSTEM = """你是「黄金积存金助手」的编辑。材料是同一时间区间内三个板块的周期汇总文档：每日新闻、每日资讯、每日军事新闻。
+COMBINED_DIGEST_SYSTEM = """你是「日常小助手」的编辑。材料是同一时间区间内三个板块的周期汇总文档：每日新闻、每日资讯、每日军事新闻。
 请整合成**一份**阶段综述邮件（Markdown）。规则：
 1. 只依据材料归纳，不编造、不补充材料之外的信息。
 2. 结构固定：
@@ -1172,7 +1172,7 @@ class DailyService:
     def _mail_name(self) -> str:
         """邮件主题前缀取「发件人显示名」，与设置页保持一致。"""
         s = self.cfg.get().get("smtp") or {}
-        return str(s.get("from_name") or "").strip() or "黄金积存金助手"
+        return str(s.get("from_name") or "").strip() or "日常小助手"
 
     # ---------- 路径 ----------
     def doc_root(self) -> str:
@@ -1443,6 +1443,68 @@ class DailyService:
                 self.log.exception("daily run_day failed")
                 return {"ok": False, "message": msg, "source_status": status}
 
+    def catchup_day(self, day: str) -> dict:
+        """补生成某天的日报：只用本机已存条目，不重新采集、不发旧邮件。"""
+        cfg = self.cfg.get()
+        made, skipped = [], []
+        for kind in KINDS:
+            if self.db.one("SELECT 1 FROM daily_doc WHERE day=? AND kind=?", (day, kind)):
+                skipped.append(kind)
+                continue
+            if kind == "news":
+                rows = self.db.daily_items(day, "news")
+            elif kind == "mil":
+                rows = self.db.daily_items(day, "mil")
+            else:
+                rows = self.db.news_of_day(day, 60)
+            if not rows:
+                skipped.append(kind)
+                continue
+            sec = _sec(cfg, kind)
+            try:
+                ai = self._ai_day(kind, day, rows, sec, False, None)
+                generated_at = iso_bj()
+                if kind == "news":
+                    cctv = [r for r in rows if str(r.get("src") or "").startswith("cctv_")]
+                    hot = [r for r in rows if not str(r.get("src") or "").startswith("cctv_")]
+                    stats = {"cctv": len(cctv), "hot": len(hot),
+                             "hot_sources": sorted({r.get("src") for r in hot}),
+                             "cctv_columns": sorted({str(r.get("src") or "")[5:] for r in cctv})}
+                    md = render_news_doc(day, rows, ai, stats, generated_at)
+                elif kind == "mil":
+                    stats = {"mil_domestic": len([r for r in rows if r.get("src") not in MIL_WORLD_SRCS]),
+                             "mil_world": len([r for r in rows if r.get("src") in MIL_WORLD_SRCS]),
+                             "sources": sorted({r.get("src") for r in rows if r.get("src")})}
+                    md = render_mil_doc(day, rows, ai, stats, generated_at)
+                else:
+                    stats = {"brief": len(rows), "signal": False}
+                    md = render_brief_doc(day, rows, ai, generated_at, None)
+                md = md.replace("\n", "\n> 补生成：本程序当天未运行，以下内容只使用本机已存条目，未重新采集。\n\n", 1)
+                path = self.day_path(kind, day)
+                self._write(path, md)
+                self.db.upsert_daily_doc({
+                    "day": day, "kind": kind, "path": path,
+                    "ai_available": ai.get("available"),
+                    "ai_reason": ai.get("reason") or "",
+                    "summary_md": ai.get("text") or "", "counts": stats})
+                made.append(kind)
+            except Exception as e:
+                self.log.warning("跨天补生成 %s %s 失败：%s", day, kind, str(e)[:120])
+        combined = None
+        if made or self.db.one("SELECT 1 FROM daily_doc WHERE day=?", (day,)):
+            combined = self.send_combined_day(day, send_mail=False, force=False)
+        if not made:
+            existing = all(self.db.one("SELECT 1 FROM daily_doc WHERE day=? AND kind=?", (day, k))
+                           for k in KINDS)
+            if existing:
+                return {"ok": True, "day": day, "made": [],
+                        "message": "当天三份文档已存在，无需补生成", "combined": combined}
+            return {"ok": False, "day": day, "message": "没有可补生成的本机条目",
+                    "skipped": skipped, "combined": combined}
+        return {"ok": True, "day": day, "made": made,
+                "message": "补生成 %d 份（%s）" % (len(made), "、".join(KINDS[k]["name"] for k in made)),
+                "combined": combined}
+
     def run_all_day(self, trigger: str = "manual", force: bool = False,
                     send_mail: bool | None = None) -> dict:
         """三份日报依次生成，再合成一封「每日综合」邮件（设置页合并后的唯一入口）。"""
@@ -1711,7 +1773,7 @@ class DailyService:
             return {"available": False, "reason": "当日没有可归纳的条目", "text": ""}
         system = {"news": NEWS_DAY_SYSTEM, "mil": MIL_DAY_SYSTEM}.get(kind, BRIEF_DAY_SYSTEM)
         user = "日期：%s（%s）\n\n材料：\n%s" % (day, _weekday(day), "\n".join(lines))
-        r = self.ai.summarize(system, user, 1400, force)
+        r = self.ai.summarize(system, user, 1400, force, daily=True)
         if not r.get("ok"):
             return {"available": False, "reason": _reason_text(r.get("reason")), "text": ""}
         text = r["text"]
@@ -2011,7 +2073,7 @@ class DailyService:
             chunks.append(cur)
         notes = []
         for i, ch in enumerate(chunks, 1):
-            r = self.ai.summarize(DIGEST_MAP_SYSTEM, "\n\n".join(ch), 900, force)
+            r = self.ai.summarize(DIGEST_MAP_SYSTEM, "\n\n".join(ch), 900, force, daily=True)
             if not r.get("ok"):
                 # 预算用尽或调用失败：已归纳的部分照样可用，后面交给降级文本
                 return {"available": False, "reason": r.get("reason") or "AI 未返回内容",
@@ -2021,7 +2083,7 @@ class DailyService:
         return self._summarize_or_none(system, "\n\n".join(notes), 2000, force)
 
     def _summarize_or_none(self, system: str, user: str, max_tokens: int, force: bool) -> dict:
-        r = self.ai.summarize(system, user, max_tokens, force)
+        r = self.ai.summarize(system, user, max_tokens, force, daily=True)
         if not r.get("ok"):
             return {"available": False, "reason": _reason_text(r.get("reason")), "text": ""}
         return {"available": True, "text": r["text"], "usage": r.get("usage")}
