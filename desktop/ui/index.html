@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>黄金积存金助手 v1.0</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body class="kind-desktop">
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand"><span class="logo">Au</span><div><b>黄金积存金助手</b><small>v1.0 · <span id="kindLabel">Windows 桌面程序</span></small></div></div>
+    <div class="dragfill" id="dragFill" title="拖动移动窗口，双击最大化 / 还原"></div>
+    <div class="top-right">
+      <span class="chip" id="clock">--:--</span>
+      <span class="chip line" id="statusChip">连接中</span>
+      <button class="btn sm pri" onclick="quickFetch('fetch_and_analyze')">一键获取</button>
+      <button class="btn sm" onclick="runSelfcheck()">自检</button>
+      <button class="btn sm" id="quitBtn" onclick="quitApp()">退出</button>
+      <div class="winctrls" id="winCtrls">
+        <button class="winbtn" id="winMin" title="最小化">─</button>
+        <button class="winbtn" id="winMax" title="最大化 / 还原">□</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <button class="nav on" data-page="overview" onclick="go('overview')"><span>▦</span>总览</button>
+      <button class="nav" data-page="market" onclick="go('market')"><span>◫</span>行情</button>
+      <button class="nav" data-page="insight" onclick="go('insight')"><span>◈</span>资讯与 AI 研判</button>
+      <button class="nav" data-page="history" onclick="go('history')"><span>◷</span>时段新闻研判</button>
+      <button class="nav" data-page="holding" onclick="go('holding')"><span>◉</span>持仓与交易</button>
+      <button class="nav" data-page="strategy" onclick="go('strategy')"><span>◇</span>策略与情景</button>
+      <button class="nav" data-page="daily" onclick="go('daily')"><span>▤</span>每日新闻</button>
+      <button class="nav" data-page="settings" onclick="go('settings')"><span>⚙</span>设置</button>
+      <div class="side-foot">
+        <div class="inst-card"><b id="sideKind">Windows 桌面程序</b><small id="sideInst">—</small></div>
+        <div class="side-note" id="sideNext">下一次推送 —</div>
+      </div>
+    </aside>
+
+    <main class="content">
+
+      <!-- 1 总览 -->
+      <section class="page active" id="page-overview">
+        <div class="phead"><div><h2>总览</h2><p id="ovSub">加载中…</p></div>
+          <div class="acts"><span class="tag line" id="ovVer">—</span><button class="btn sm" onclick="loadState()">刷新</button></div></div>
+        <div id="ovPriceCards" class="cards ov-cards"></div>
+        <div class="grid2">
+          <div class="card"><div class="ch"><h3>金价详细走势</h3>
+              <div class="gtabs" id="gtSym"><button class="tab on" data-sym="domestic" onclick="setGoldChart('domestic')">国内（元/克）</button><button class="tab" data-sym="xau" onclick="setGoldChart('xau')">国际 XAU（美元/盎司）</button></div></div>
+            <div class="gtabs" id="gtPeriods"></div>
+            <div id="gtStats" class="gtstats"></div>
+            <div class="gtwrap"><div id="ovChart" class="chart tall"></div><div class="gttip" id="gtTip"></div></div>
+            <div class="hint" id="gtNote">加载中…</div></div>
+          <div class="card"><div class="ch"><h3>AI 研判</h3><span class="sub" id="ovSigTime">—</span></div>
+            <div id="ovSignal"></div></div>
+        </div>
+        <div class="card mt"><div class="ch"><h3>最新要闻</h3><span class="sub">仅存标题 / 摘要 / 链接 / 来源</span></div>
+          <div id="ovNews"></div></div>
+        <div class="fetchbar"><b>手动获取</b>
+          <button class="btn sm" onclick="quickFetch('refresh_prices')">刷新报价</button>
+          <button class="btn sm" onclick="quickFetch('fetch_news')">获取资讯</button>
+          <button class="btn sm" onclick="quickFetch('re_analyze')">重新研判</button>
+          <button class="btn sm pri" onclick="quickFetch('fetch_and_analyze')">一键获取并研判</button>
+          <button class="btn sm" onclick="quickFetch('flash',true)">生成快报并发信</button>
+          <span id="ovFetchSt" class="fetchst">尚未手动获取</span>
+        </div>
+      </section>
+
+      <!-- 2 行情 -->
+      <section class="page" id="page-market">
+        <div class="phead"><div><h2>行情</h2><p>五种口径严格区分 · 每个数值带来源与源报价时间</p></div>
+          <div class="acts"><button class="btn sm pri" onclick="quickFetch('refresh_prices')">手动刷新报价</button></div></div>
+        <div class="card"><div class="ch"><h3>多口径报价</h3><span class="sub">涨=红 / 跌=绿</span></div>
+          <div id="mkTable" class="tablewrap"></div></div>
+        <div class="card mt"><div class="ch"><h3>数据质量与降级</h3><span class="sub">源间分歧 / 陈旧 / 缓存 / 休市</span></div>
+          <div id="mkQuality"></div></div>
+        <div class="card mt"><div class="ch"><h3>数据源健康</h3><button class="btn sm" onclick="runSelfcheck('market')">重新检测</button></div>
+          <div id="mkSources" class="hint">点「重新检测」查看各源连通性</div></div>
+        <div class="card mt"><div class="ch"><h3>口径说明</h3></div>
+          <div class="note"><b>银行积存金买入/卖出价</b>＝真实成交口径（未接入，需自备官方接口）；<b>上金所 Au99.99</b>＝国内实时金价参考口径（已接入新浪行情，非银行成交价，总览「国内实时金价」即此项）；<b>XAU/USD</b>＝国际驱动口径；<b>折算参考价</b>＝XAU/USD ÷ 31.1034768 × USD/CNY，<b>非银行成交价</b>。金店饰品价明确不采集。国内克价上涨不等于国际金价上涨，需先拆汇率。</div></div>
+      </section>
+
+      <!-- 3 研判 -->
+      <section class="page" id="page-insight">
+        <div class="phead"><div><h2>资讯与 AI 研判</h2><p>结构化输入 → 短期 / 长期走向预判 + 条件化投资建议 · 不给买卖点位与仓位比例</p></div>
+          <div class="acts"><span class="tag line" id="inBudget">—</span></div></div>
+        <div class="fetchbar"><b>手动操作</b>
+          <button class="btn sm" onclick="quickFetch('fetch_news')">立即获取资讯</button>
+          <button class="btn sm" onclick="quickFetch('re_analyze')">重新研判</button>
+          <button class="btn sm pri" onclick="quickFetch('fetch_and_analyze')">一键获取并研判</button>
+          <button class="btn sm" onclick="quickFetch('daily',true)">生成日报并发信</button>
+          <span id="inFetchSt" class="fetchst">—</span>
+        </div>
+        <div class="grid2">
+          <div class="card"><div class="ch"><h3>要闻列表</h3><span class="sub" id="inNewsCount">—</span></div><div id="inNews"></div></div>
+          <div class="card"><div class="ch"><h3>研判详情</h3><span class="sub">DeepSeek 结构化输出</span></div><div id="inSignal"></div></div>
+        </div>
+        <div class="card mt"><div class="ch"><h3>历史报告</h3><span class="sub">本端生成，可预览 HTML / 纯文本</span></div><div id="inReports"></div></div>
+      </section>
+
+      <!-- 3.5 时段新闻研判 -->
+      <section class="page" id="page-history">
+        <div class="phead"><div><h2>时段新闻与未来情景研判</h2><p>按区间回看新闻 → AI 归纳未来涨跌倾向 · 可选发送到邮箱</p></div>
+          <div class="acts"><span class="tag line" id="hiBudget">—</span></div></div>
+        <div class="compliance"><b>合规说明：</b>本模块是基于历史新闻样本的<b>条件化情景归纳，不是价格预测</b>；不承诺收益或准确率，不提供买卖点位、仓位比例或确定性买卖指令。历史新闻覆盖度取决于数据源可用性；样本不足或档案源不可用时，方向强制输出「信号不明确」。</div>
+
+        <div class="card">
+          <div class="ch"><h3>1. 选择分析区间</h3><span class="sub">默认近半年 / 近一年，也支持自定义日期</span></div>
+          <div class="presetrow" id="hiPresets">
+            <button class="preset" data-preset="3m" onclick="setHistoryPreset('3m')">近 3 个月</button>
+            <button class="preset on" data-preset="6m" onclick="setHistoryPreset('6m')">近半年（默认）</button>
+            <button class="preset" data-preset="1y" onclick="setHistoryPreset('1y')">近一年</button>
+            <button class="preset" data-preset="custom" onclick="setHistoryPreset('custom')">自定义日期</button>
+          </div>
+          <div class="form gridform mt">
+            <label>开始日期</label><input id="hiStart" type="date">
+            <label>结束日期</label><input id="hiEnd" type="date">
+            <label>未来观察尺度</label><select id="hiHorizon">
+              <option value="1-4w">未来 2–4 周</option>
+              <option value="1-3m" selected>未来 1–3 个月</option>
+              <option value="3-6m">未来 3–6 个月</option></select>
+            <label>最大新闻样本数</label><input id="hiMaxItems" type="number" value="60" min="10" max="200">
+          </div>
+          <div class="btnrow">
+            <button class="btn pri" id="hiRunBtn" onclick="runHistory()">开始采集并 AI 研判</button>
+            <label class="chk"><input type="checkbox" id="hiSendMail"> 同时发送到邮箱</label>
+            <span class="hint" id="hiMailHint">邮件通道与 DeepSeek Key 在设置页配置</span>
+          </div>
+          <div class="hint mt" id="hiStatus">尚未运行。外部历史档案源不可达时会如实显示源状态，样本只取本端已落库与近期 RSS。</div>
+        </div>
+
+        <div class="grid2">
+          <div class="card"><div class="ch"><h3>2. 区间新闻采集</h3><span class="sub" id="hiCount">—</span></div>
+            <div id="hiSources" class="hint">尚未采集</div>
+            <div id="hiTopics" class="mt"></div>
+            <div id="hiMonthly" class="mt"></div>
+            <div id="hiCoverage" class="hint mt"></div>
+          </div>
+          <div class="card"><div class="ch"><h3>3. AI 未来涨跌情景研判</h3><span class="sub" id="hiModel">—</span></div>
+            <div id="hiResult"><div class="empty">点「开始采集并 AI 研判」生成结果</div></div>
+          </div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>4. 区间新闻样本</h3><span class="sub" id="hiNewsCount">仅标题 / 摘要 / 链接 / 来源 / 日期</span></div>
+          <div id="hiNews"><div class="empty">尚未采集</div></div></div>
+
+        <div class="card mt"><div class="ch"><h3>5. 本端历史分析记录</h3><button class="btn sm" onclick="loadHistoryRuns()">刷新</button></div>
+          <div id="hiRuns"><div class="empty">尚无记录</div></div></div>
+      </section>
+
+      <!-- 4 持仓 -->
+      <section class="page" id="page-holding">
+        <div class="phead"><div><h2>持仓与交易</h2><p>手工录入 · 未连接银行账户 · 不代客理财</p></div></div>
+        <div class="warn">当前<b>未接入银行官方开放接口</b>：持仓由本人手工录入，交易区仅为「本端二次确认 + 审计留痕」流程演示，<b>不会发起任何真实交易</b>。系统不承诺收益、不给买卖点位或仓位指令。</div>
+        <div class="grid2">
+          <div class="card"><div class="ch"><h3>持仓录入</h3><span class="sub">仅存本端</span></div>
+            <div class="form"><label>持有克数（克）</label><input id="hdGrams" type="number" step="0.0001" placeholder="例如 12.5000">
+            <label>成本价（元/克）</label><input id="hdCost" type="number" step="0.01" placeholder="例如 720.00">
+            <label>备注</label><input id="hdNote" placeholder="选填">
+            <button class="btn pri" onclick="saveHoldings()">保存到本端</button></div>
+            <div id="hdSummary" class="mt"></div>
+          </div>
+          <div class="card"><div class="ch"><h3>交易流程演示</h3><span class="sub">本端闭环</span></div>
+            <div class="form"><label>动作</label><select id="tdType"><option value="申购">申购</option><option value="赎回">赎回</option></select>
+            <label>金额（元 · 示例）</label><input id="tdAmount" type="number" value="1000">
+            <label>确认方式</label><input value="本程序内二次确认" readonly>
+            <button class="btn pri" onclick="openTradeConfirm()">提交并二次确认</button></div>
+            <div class="flow mt"><span class="step">本端发起</span>→<span class="step">本端二次确认</span>→<span class="step">审计留痕</span>→<span class="step">可撤销</span></div>
+          </div>
+        </div>
+        <div class="card mt"><div class="ch"><h3>本端审计日志</h3></div><div id="hdAudit"></div></div>
+      </section>
+
+      <!-- 5 策略 -->
+      <section class="page" id="page-strategy">
+        <div class="phead"><div><h2>策略与情景</h2><p>条件化观察框架 · 非买卖指令 · 不承诺收益</p></div>
+          <div class="acts"><button class="btn sm pri" onclick="runBacktest()">运行区间测算</button></div></div>
+        <div class="warn"><b>风险揭示：</b>以下均为条件化情景与历史区间描述，不是策略回测、不是收益测算、不预示未来收益。样本量小、未计点差与手续费、未做样本外检验，存在严重过拟合风险。</div>
+        <div class="grid2">
+          <div class="card"><div class="ch"><h3>条件化情景</h3><span class="sub">若 X 发生，则关注 Y</span></div>
+            <div class="note" id="stScenarios"></div></div>
+          <div class="card"><div class="ch"><h3>历史区间测算</h3><span class="sub">基于本端快照</span></div><div id="stBacktest" class="hint">点「运行区间测算」</div></div>
+        </div>
+        <div class="card mt"><div class="ch"><h3>判断框架（写进 system prompt）</h3></div>
+          <div class="note">美元/实际利率、通胀与美联储政策、地缘避险、央行购金与 ETF 资金流、汇率与国内口径、技术面位置。常见误判已在 Prompt 中提示：名义利率≠实际利率、预期兑现日反向波动、避险升温不等于必涨、单周流量≠趋势、国内克价≠国际金价。低置信度时强制输出「信号不明确」。</div></div>
+      </section>
+
+      <!-- 5.5 每日新闻 / 每日资讯 -->
+      <section class="page" id="page-daily">
+        <div class="phead"><div><h2>每日新闻 · 每日资讯 · 军事新闻</h2><p id="dlSub">央视新闻 + 互联网热搜 → AI 总结 → 每日本地文档 → 周期汇总发送到邮箱</p></div>
+          <div class="acts"><button class="btn sm" id="dlOpenBtn" onclick="openDocFolder()">打开文档文件夹</button>
+            <button class="btn sm pri" id="dlRunBtn" onclick="runDaily()">立即采集并 AI 总结</button></div></div>
+        <div class="ktabs" id="dlKind">
+          <button class="ktab on" data-kind="news" onclick="setDailyKind('news')">每日新闻（央视 + 热搜）</button>
+          <button class="ktab" data-kind="brief" onclick="setDailyKind('brief')">每日资讯（资讯与 AI 研判）</button>
+          <button class="ktab" data-kind="mil" onclick="setDailyKind('mil')">每日军事新闻（国内 + 国际）</button>
+        </div>
+        <div class="grid2 mt">
+          <div class="card" onclick="viewTodayDoc()" style="cursor:pointer" title="点击查看今日完整文档">
+            <div class="ch"><h3 id="dlAiTitle">今日 AI 总结</h3><span class="sub" id="dlAiTime">—</span></div>
+            <div id="dlAi" class="docbody"><div class="empty">今日尚未生成</div></div>
+            <div class="hint mt" id="dlAiNote"></div>
+            <div class="hint mt">点击此处查看今日完整文档（含当日全部条目）→</div>
+          </div>
+          <div class="card"><div class="ch"><h3>今日概况</h3><span class="sub" id="dlToday">—</span></div>
+            <div id="dlSummary"></div>
+            <div class="ch mt"><h3>周期汇总</h3><button class="btn sm" id="dlDigestBtn" onclick="runDigestNow()">立即汇总并发信</button></div>
+            <div id="dlDigest"></div></div>
+        </div>
+        <div class="card mt"><div class="ch"><h3 id="dlListTitle">今日新闻列表</h3><span class="sub" id="dlListSub">按栏目 / 平台排名排列，点击标题可打开原文</span></div>
+          <div class="ktabs" id="dlSrcTabs"></div>
+          <div id="dlList"></div></div>
+        <div class="card mt"><div class="ch"><h3>历史文档与汇总记录</h3><span class="sub">点日期即可预览文档 · 本机 Markdown</span></div>
+          <div id="dlDocs"><div class="empty">尚无记录</div></div></div>
+      </section>
+
+      <!-- 6 设置 -->
+      <section class="page" id="page-settings">
+        <div class="phead"><div><h2>设置</h2><p>本端配置 · 只保存在本机</p></div>
+          <div class="acts"><span class="tag blue" id="setVer">—</span><button class="btn sm" onclick="loadConfig()">重新载入</button></div></div>
+
+        <div class="warn"><b>单端说明：</b>本版只有 Windows 桌面端一个程序，<b>不再提供手机端 APK</b>。配置、数据库与密钥都只保存在本机，没有跨端同步；定时推送也只由本端发出，不会出现两处重复发信。</div>
+
+        <div class="card"><div class="ch"><h3>本端定时推送总开关</h3><span class="sub">关闭后本端不自动发信，仍可手动获取</span></div>
+          <div class="row"><div><div class="t">自动定时推送</div><div class="d" id="setNext">下一次推送 —</div></div>
+            <div class="r"><button class="sw on" id="masterSw" onclick="toggleMaster(this)"><i></i></button></div></div>
+          <div class="row"><div><div class="t">本端标识</div><div class="d" id="setInst">—</div></div><div class="r"><span class="tag line" id="setPort">—</span></div></div>
+          <div class="row"><div><div class="t">密钥安全存储</div><div class="d" id="setSecBackend">—</div></div><div class="r"><span class="tag down">仅本端</span></div></div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>开机自启动</h3><span class="sub" id="asState">—</span></div>
+          <div class="row"><div><div class="t">登录 Windows 后自动启动本程序</div><div class="d" id="asPath">—</div></div>
+            <div class="r"><button class="sw" id="f_autostart" onclick="toggleAutostart(this)"><i></i></button></div></div>
+          <div class="hint mt" id="asTip">开关只写入 / 删除当前 Windows 用户的启动项（注册表 Run，不需要管理员权限），随时可以在这里关掉。</div></div>
+
+        <div class="card mt"><div class="ch"><h3>邮箱配置（SMTP）</h3><span class="sub" id="smtpState">—</span></div>
+          <div class="form gridform">
+            <label>启用邮件通道 <button class="sw" id="f_smtp_enabled" onclick="tog(this)"><i></i></button></label>
+            <div></div>
+            <label>SMTP 服务器</label><input id="f_smtp_host" placeholder="smtp.qq.com">
+            <label>端口</label><input id="f_smtp_port" type="number" value="465">
+            <label>加密方式</label><select id="f_smtp_security"><option value="ssl_tls">SSL/TLS（465）</option><option value="starttls">STARTTLS（587）</option><option value="none">无加密</option></select>
+            <label>发件邮箱</label><input id="f_smtp_user" placeholder="sender@example.com">
+            <label>邮箱授权码（非登录密码）</label><div class="secret"><input id="f_smtp_credential" type="password" placeholder="未录入则保持原值"><button class="btn sm" onclick="toggleSecret('f_smtp_credential',this)">显示</button></div>
+            <label>发件人显示名</label><input id="f_smtp_from_name" value="黄金积存金助手">
+            <label>收件人（逗号分隔）</label><input id="f_smtp_to" placeholder="you@example.com">
+            <label>抄送（逗号分隔）</label><input id="f_smtp_cc" placeholder="选填">
+            <label>单日邮件上限</label><input id="f_smtp_max_mails_per_day" type="number" value="12">
+            <label>连接超时（秒）</label><input id="f_smtp_timeout_seconds" type="number" value="20">
+            <label>失败重试次数</label><input id="f_smtp_retry_times" type="number" value="3">
+            <label>HTML + 纯文本双版本 <button class="sw on" id="f_smtp_html_and_text" onclick="tog(this)"><i></i></button></label>
+            <div></div>
+          </div>
+          <div class="btnrow"><button class="btn pri" onclick="saveConfig()">保存本端配置</button>
+            <button class="btn" onclick="testSmtp()">测试连接</button>
+            <button class="btn" onclick="testMail()">发送测试邮件</button>
+            <button class="btn" onclick="rollbackConfig()">恢复上一版本</button></div>
+          <div class="hint mt" id="smtpTip">授权码仅存本端安全存储，界面默认掩码；不入库、不入日志、不入邮件、不跨端复制。</div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>DeepSeek API 配置</h3><span class="sub" id="dsState">—</span></div>
+          <div class="form gridform">
+            <label>API Key</label><div class="secret"><input id="f_ds_api_key" type="password" placeholder="未录入则保持原值"><button class="btn sm" onclick="toggleSecret('f_ds_api_key',this)">显示</button></div>
+            <label>Base URL</label><input id="f_ds_base_url" value="https://api.deepseek.com">
+            <label>快报模型</label><input id="f_ds_model_flash" value="deepseek-flash">
+            <label>日报模型</label><input id="f_ds_model_pro" value="deepseek-v4-pro">
+            <label>max_tokens</label><input id="f_ds_max_tokens" type="number" value="1200">
+            <label>超时（秒）</label><input id="f_ds_timeout_seconds" type="number" value="60">
+            <label>失败重试次数</label><input id="f_ds_retry_times" type="number" value="2">
+            <label>每日调用上限</label><input id="f_ds_max_calls_per_day" type="number" value="40">
+            <label>每日 token 预算</label><input id="f_ds_daily_token_budget" type="number" value="200000">
+            <label>JSON Output <button class="sw on" id="f_ds_json_output" onclick="tog(this)"><i></i></button></label>
+            <div></div>
+            <label>Prompt 版本（只读）</label><input id="f_ds_prompt_version" readonly>
+          </div>
+          <div class="btnrow"><button class="btn pri" onclick="saveConfig()">保存本端配置</button>
+            <button class="btn" onclick="testDeepseek()">测试连接（极小额调用）</button>
+            <button class="btn" onclick="go('insight')">查看本端用量</button></div>
+          <div class="hint mt" id="dsUsage">—</div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>时段新闻研判配置</h3><span class="sub">FR-16 · 本端配置</span></div>
+          <div class="form gridform">
+            <label>Alpha Vantage Key（可选历史新闻源 · <a href="https://www.alphavantage.co/support/#api-key" target="_blank">免费申请</a>）</label><div class="secret"><input id="f_ha_alpha_key" type="password" placeholder="未录入则保持原值"><button class="btn sm" onclick="toggleSecret('f_ha_alpha_key',this)">显示</button></div>
+            <label>默认时间段</label><select id="f_ha_preset"><option value="3m">近 3 个月</option><option value="6m">近半年</option><option value="1y">近一年</option><option value="custom">自定义日期</option></select>
+            <label>默认未来观察尺度</label><select id="f_ha_horizon"><option value="1-4w">未来 2–4 周</option><option value="1-3m">未来 1–3 个月</option><option value="3-6m">未来 3–6 个月</option></select>
+            <label>最大新闻样本数</label><input id="f_ha_max_items" type="number" value="60" min="10" max="200">
+            <label>送入 AI 的最大条数</label><input id="f_ha_max_ai" type="number" value="40" min="5" max="100">
+            <label>可给方向的最小样本数</label><input id="f_ha_min_news" type="number" value="8" min="1" max="100">
+            <label>单源超时（秒）</label><input id="f_ha_timeout" type="number" value="10" min="1" max="30">
+            <label>采集总时限（秒）</label><input id="f_ha_deadline" type="number" value="22" min="3" max="60">
+            <label>重复运行最小间隔（秒）</label><input id="f_ha_interval" type="number" value="20" min="0" max="600">
+            <label>默认勾选发送到邮箱 <button class="sw" id="f_ha_send_mail" onclick="tog(this)"><i></i></button></label>
+            <div></div>
+          </div>
+          <div class="ch mt"><h3>历史新闻数据源</h3><span class="sub">任一源失败不影响其它源</span></div>
+          <div id="haSourceList"></div>
+          <div class="btnrow"><button class="btn pri" onclick="saveConfig()">保存本端配置</button></div>
+          <div class="hint mt">GDELT / Google News 为公开历史档案源，部分网络可能无法访问；Alpha Vantage NEWS 覆盖历史新闻，在官网免费申请 Key（约 20 秒，25 次/天），粘贴并保存后会自动打开该源。所有密钥仅存本端安全存储，界面只显示掩码。</div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>推送时点</h3><button class="btn sm pri" onclick="addSlot()">+ 添加时点</button></div>
+          <div id="slotList"></div>
+          <div class="form gridform mt">
+            <label>静默时段起</label><input id="f_q_start" value="23:00">
+            <label>静默时段止（支持跨日）</label><input id="f_q_end" value="07:00">
+            <label>单日事件级上限</label><input id="f_max_event" type="number" value="4">
+            <label>休市跳过快报 <button class="sw on" id="f_skip_closed" onclick="tog(this)"><i></i></button></label>
+            <div></div>
+            <label>手动获取最小间隔（秒）</label><input id="f_mf_interval" type="number" value="60">
+            <label>快照缓存（秒）</label><input id="f_mf_cache" type="number" value="300">
+            <label>手动获取计入预算 <button class="sw on" id="f_mf_budget" onclick="tog(this)"><i></i></button></label>
+            <div></div>
+          </div>
+          <div class="btnrow"><button class="btn pri" onclick="saveScheduleSettings()">保存时点与策略</button>
+            <button class="btn" onclick="clearSlots()">清空时点</button></div>
+          <div class="hint mt">时点可增删改、改类型、启停、清空；保存后本端调度器即时热重载。</div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>每日新闻</h3><span class="sub">央视新闻 + 互联网热搜 → AI 总结 → 每日本地文档 → 周期汇总发邮箱</span></div>
+          <div class="form gridform">
+            <label>启用每日新闻 <button class="sw on" id="f_dn_enabled" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>每日采集与 AI 总结时间</label><input id="f_dn_time" type="time" value="20:30">
+            <label>采集央视新闻 <button class="sw on" id="f_dn_cctv" onclick="tog(this)"><i></i></button></label>
+            <div class="inline">每个栏目最多 <input id="f_dn_cctv_max" type="number" value="20" min="5" max="100" class="mini"> 条（要闻 / 国内 / 国际 / 社会 / 科技）</div>
+            <label>采集互联网热搜 <button class="sw on" id="f_dn_hot" onclick="tog(this)"><i></i></button></label>
+            <div class="inline">每个平台取前 <input id="f_dn_hot_max" type="number" value="10" min="5" max="50" class="mini"> 条</div>
+            <label>热搜平台</label>
+            <div class="inline sws">
+              <label class="chk"><input type="checkbox" id="f_dn_hs_weibo"> 微博</label>
+              <label class="chk"><input type="checkbox" id="f_dn_hs_baidu"> 百度</label>
+              <label class="chk"><input type="checkbox" id="f_dn_hs_douyin"> 抖音</label>
+              <label class="chk"><input type="checkbox" id="f_dn_hs_bilibili"> B站</label>
+              <label class="chk"><input type="checkbox" id="f_dn_hs_zhihu"> 知乎</label>
+            </div>
+            <label>文档开头的 AI 总结 <button class="sw on" id="f_dn_ai" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>每日总结发送到邮箱 <button class="sw" id="f_dn_mail" onclick="tog(this)"><i></i></button></label><div></div>
+          </div>
+          <div class="ch mt"><h3>周期汇总</h3><span class="sub">AI 汇总区间内各日总结 → 汇总文档 → 邮箱</span></div>
+          <div class="form gridform">
+            <label>汇总周期（可多选）</label>
+            <div class="inline sws">
+              <label class="chk"><input type="checkbox" value="1d" name="dn_per"> 每天</label>
+              <label class="chk"><input type="checkbox" value="1w" name="dn_per"> 每周</label>
+              <label class="chk"><input type="checkbox" value="1m" name="dn_per"> 每月</label>
+              <label class="chk"><input type="checkbox" value="6m" name="dn_per"> 每半年</label>
+              <label class="chk"><input type="checkbox" value="1y" name="dn_per"> 每年</label>
+              <label class="chk"><input type="checkbox" value="custom" name="dn_per"> 自定义</label>
+            </div>
+            <label>自定义间隔天数</label><input id="f_dn_custom" type="number" value="15" min="1" max="3650">
+            <label>汇总生成时间</label><input id="f_dn_dtime" type="time" value="21:30">
+            <label>汇总发送到邮箱 <button class="sw on" id="f_dn_dmail" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>文档保存目录</label><input id="f_doc_dir" placeholder="留空 = 数据目录（data\每日新闻、data\每日资讯）">
+          </div>
+          <div class="btnrow"><button class="btn pri" onclick="saveDailySettings('news')">保存每日新闻设置</button>
+            <button class="btn" onclick="go('daily')">打开每日新闻</button></div>
+          <div class="hint mt">每天到点后自动采集并生成一份 Markdown 文档（AI 总结 + 央视各栏目 + 各平台热搜）。汇总周期可多选，每个周期各出一份汇总文档：每周 = 上一个自然周（周一至周日），周一到期；每月 = 上一个自然月；电脑当时关机的话，下次开机到点会自动补做。发送邮箱需先在上方启用 SMTP。</div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>每日资讯</h3><span class="sub">「资讯与 AI 研判」页当日要闻 + 当日研判 → 每日本地文档 → 周期汇总发邮箱</span></div>
+          <div class="form gridform">
+            <label>启用每日资讯 <button class="sw on" id="f_bf_enabled" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>每日生成时间</label><input id="f_bf_time" type="time" value="21:10">
+            <label>当日要闻最多条数</label><input id="f_bf_max" type="number" value="40" min="5" max="200">
+            <label>文档开头的 AI 总结 <button class="sw on" id="f_bf_ai" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>每日总结发送到邮箱 <button class="sw" id="f_bf_mail" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>汇总周期（可多选）</label>
+            <div class="inline sws">
+              <label class="chk"><input type="checkbox" value="1d" name="bf_per"> 每天</label>
+              <label class="chk"><input type="checkbox" value="1w" name="bf_per"> 每周</label>
+              <label class="chk"><input type="checkbox" value="1m" name="bf_per"> 每月</label>
+              <label class="chk"><input type="checkbox" value="6m" name="bf_per"> 每半年</label>
+              <label class="chk"><input type="checkbox" value="1y" name="bf_per"> 每年</label>
+              <label class="chk"><input type="checkbox" value="custom" name="bf_per"> 自定义</label>
+            </div>
+            <label>自定义间隔天数</label><input id="f_bf_custom" type="number" value="15" min="1" max="3650">
+            <label>汇总生成时间</label><input id="f_bf_dtime" type="time" value="21:30">
+            <label>汇总发送到邮箱 <button class="sw on" id="f_bf_dmail" onclick="tog(this)"><i></i></button></label><div></div>
+          </div>
+          <div class="btnrow"><button class="btn pri" onclick="saveDailySettings('brief')">保存每日资讯设置</button>
+            <button class="btn" onclick="go('daily')">打开每日资讯</button></div>
+          <div class="hint mt">文档目录与「每日新闻」共用。汇总时间建议晚于生成时间，这样当天文档也会计入汇总。</div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>每日军事新闻</h3><span class="sub">中国军网 / 人民网军事（国内）+ 央视国际军事（国际）→ AI 总结（含与黄金积存买卖的关系）→ 每日本地文档 → 周期汇总发邮箱</span></div>
+          <div class="form gridform">
+            <label>启用每日军事新闻 <button class="sw on" id="f_mn_enabled" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>每日采集与 AI 总结时间</label><input id="f_mn_time" type="time" value="19:40">
+            <label>每日最多条数</label><input id="f_mn_max" type="number" value="60" min="5" max="200">
+            <label>文档开头的 AI 总结 <button class="sw on" id="f_mn_ai" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>每日总结发送到邮箱 <button class="sw" id="f_mn_mail" onclick="tog(this)"><i></i></button></label><div></div>
+            <label>汇总周期（可多选）</label>
+            <div class="inline sws">
+              <label class="chk"><input type="checkbox" value="1d" name="mn_per"> 每天</label>
+              <label class="chk"><input type="checkbox" value="1w" name="mn_per"> 每周</label>
+              <label class="chk"><input type="checkbox" value="1m" name="mn_per"> 每月</label>
+              <label class="chk"><input type="checkbox" value="6m" name="mn_per"> 每半年</label>
+              <label class="chk"><input type="checkbox" value="1y" name="mn_per"> 每年</label>
+              <label class="chk"><input type="checkbox" value="custom" name="mn_per"> 自定义</label>
+            </div>
+            <label>自定义间隔天数</label><input id="f_mn_custom" type="number" value="15" min="1" max="3650">
+            <label>汇总生成时间</label><input id="f_mn_dtime" type="time" value="21:35">
+            <label>汇总发送到邮箱 <button class="sw on" id="f_mn_dmail" onclick="tog(this)"><i></i></button></label><div></div>
+          </div>
+          <div class="btnrow"><button class="btn pri" onclick="saveDailySettings('mil')">保存每日军事新闻设置</button>
+            <button class="btn" onclick="go('daily');setDailyKind('mil')">打开每日军事新闻</button></div>
+          <div class="hint mt">采集国内军事（中国军网要闻、人民网军事）与国际军事（央视国际里按军事、地缘关键词筛），AI 除归纳要闻外，还单列「地缘风险与黄金」和「对黄金积存买卖的参考」（只给条件化判断，不给点位与仓位）。</div>
+        </div>
+
+        <div class="card mt"><div class="ch"><h3>一键自检</h3><button class="btn sm" onclick="runSelfcheck('settings')">运行</button></div>
+          <div id="setSelfcheck" class="hint">逐项检测金价源、新闻源、DeepSeek、SMTP 与本端数据库</div></div>
+
+        <div class="card mt"><div class="ch"><h3>本端运行信息</h3></div><div id="setInfo"></div></div>
+
+        <div class="disclaimer" id="disclaimer"></div>
+      </section>
+
+    </main>
+  </div>
+
+<div class="toast" id="toast"></div>
+<div class="modal-mask" id="tradeModal">
+  <div class="modal"><h3>本端二次确认</h3>
+    <div class="ln"><span>动作</span><b id="cmType">申购</b></div>
+    <div class="ln"><span>金额</span><b id="cmAmount">—</b></div>
+    <div class="ln"><span>价格口径</span><b>未接银行报价，不计算成交</b></div>
+    <div class="ln"><span>发起端 / 确认端</span><b id="cmInst">本端 / 本端</b></div>
+    <div class="risk">仅为流程演示与审计留痕，<b>不会发起任何真实交易</b>；系统不承诺收益、不代替您做出投资决策。</div>
+    <div class="btnrow"><button class="btn" onclick="closeTradeConfirm()">取消</button><button class="btn pri" onclick="confirmTrade()">确认并留痕</button></div>
+  </div>
+</div>
+<div class="modal-mask" id="reportModal">
+  <div class="modal wide"><h3>报告预览</h3><div class="btnrow"><button class="btn sm" onclick="switchReport('html')">HTML</button><button class="btn sm" onclick="switchReport('text')">纯文本</button><button class="btn sm" onclick="closeReport()">关闭</button></div>
+    <div id="reportBody" class="reportbody"></div></div>
+</div>
+
+<div class="modal-mask" id="docModal">
+  <div class="modal wide"><h3 id="docTitle">文档预览</h3>
+    <div class="btnrow"><button class="btn sm" onclick="closeDoc()">关闭</button><span class="hint" id="docPath"></span></div>
+    <div id="docBody" class="docbody"></div></div>
+</div>
+
+<div class="modal-mask" id="artModal">
+  <div class="modal wide"><h3 id="artTitle">正文</h3>
+    <div class="btnrow" style="justify-content:space-between">
+      <span class="hint" id="artMeta"></span>
+      <span>
+        <a class="btn sm" id="artOpen" target="_blank" rel="noopener" style="display:none">打开原文</a>
+        <button class="btn sm" onclick="openArticleFile()">打开本地正文文件</button>
+        <button class="btn sm" onclick="closeArticle()">关闭</button>
+      </span>
+    </div>
+    <div id="artBody" class="docbody"></div></div>
+</div>
+<div class="exitmask" id="exitMask"><div class="exitbox"><h3>本端程序已退出</h3>
+  <p>后台调度器与本地服务已停止，可以关闭此窗口。</p>
+  <p class="hint">重新启动桌面端程序即可恢复；本端配置、数据库与密钥都保留在本机。</p>
+</div></div>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>
+

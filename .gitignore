@@ -1,0 +1,53 @@
+# 本端运行时数据：配置、密钥、数据库、日志均不入库
+**/data/
+!**/data/.gitkeep
+*.db
+*.db-journal
+*.db-wal
+secrets.bin
+config.json
+config.backup.json
+app.log
+failed_mail_*.html
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 环境变量（命令行开发模式覆盖用）
+.env
+.env.*
+
+# 打包工具链下载缓存（457MB，仅首次搭建需要）
+.buildtools/downloads/
+.buildtools/gradle-build.log
+
+# Android 构建产物
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/gradle/wrapper/gradle-wrapper.jar
+*.apk
+*.aab
+
+# 打包产物与构建缓存（可执行文件、PyInstaller 中间产物不入库）
+dist/
+build/
+.buildtools/
+*.exe
+*.pkg
+*.pyz
+*.toc
+
+# 开发期临时脚本与截图（v2 根目录下划线开头的文件）
+/_*
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
