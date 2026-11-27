@@ -1386,6 +1386,7 @@
     }).catch(function () { toast('读取失败，请检查文档目录是否可访问'); });
   }
   function viewDoc(i) { viewDocPath(DLPATHS[i]); }
+  window.viewDocPath = viewDocPath;
   window.viewDoc = viewDoc;
   /* 今日 AI 总结卡点击 → 打开今天这份完整文档 */
   function viewTodayDoc() {
