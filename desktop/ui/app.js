@@ -1707,6 +1707,69 @@
     }).catch(function (e) { $('bkTip').textContent = '恢复失败：' + e; });
   }
   window.restoreSelected = restoreSelected;
+  var MG_SELECTED = '';
+  function backupRowsHtml(bs, action) {
+    return bs.map(function (b) {
+      return '<div class="bkrow" data-name="' + esc(b.name) + '" onclick="' + action + '(this)">' +
+        '<b>' + esc(b.name) + '</b><small>' + b.mtime + ' · ' +
+        (Math.round((b.size || 0) / 1024 / 1024 * 10) / 10) + ' MB' +
+        (b.include_secrets ? ' · 含加密密钥' : ' · 不含密钥') + '</small></div>';
+    }).join('');
+  }
+  function openMerge() {
+    MG_SELECTED = ''; $('mgTip').textContent = ''; $('mgBtn').disabled = false;
+    $('mgList').innerHTML = '<div class="empty">正在读取备份…</div>';
+    $('mergeModal').className = 'modal-mask show';
+    api('/api/export/backups', 'GET').then(function (r) {
+      var bs = (r.data || {}).backups || [];
+      if (!bs.length) {
+        $('mgList').innerHTML = '<div class="empty">还没有备份文件，请先把另一台电脑的备份放入 data\\exports</div>';
+        $('mgBtn').disabled = true;
+        return;
+      }
+      $('mgList').innerHTML = backupRowsHtml(bs, 'selectMerge');
+      MG_SELECTED = bs[0].name;
+      var first = $('mgList').firstChild; if (first) first.classList.add('sel');
+    }).catch(function (e) { $('mgList').innerHTML = '<div class="empty">读取失败：' + esc(String(e)) + '</div>'; });
+  }
+  window.openMerge = openMerge;
+  function selectMerge(el) {
+    var all = document.querySelectorAll('#mgList .bkrow');
+    for (var i = 0; i < all.length; i++) all[i].classList.remove('sel');
+    el.classList.add('sel'); MG_SELECTED = el.getAttribute('data-name') || '';
+  }
+  window.selectMerge = selectMerge;
+  function closeMerge() { $('mergeModal').className = 'modal-mask'; }
+  window.closeMerge = closeMerge;
+  function mergeSelected() {
+    if (!MG_SELECTED) { $('mgTip').textContent = '请先选择一个备份'; return; }
+    if (!confirm('将把该备份的数据补充到本机；本机配置、密钥、持仓和调度状态不会被覆盖。继续？')) return;
+    $('mgBtn').disabled = true;
+    $('mgTip').textContent = '正在合并，程序会先自动备份本机数据…';
+    api('/api/export/merge', 'POST', { name: MG_SELECTED }).then(function (r) {
+      var d = r.data || {};
+      if (!ok(r)) {
+        $('mgTip').textContent = '合并失败：' + (d.message || '未知错误');
+        $('mgBtn').disabled = false;
+        return;
+      }
+      var docs = d.documents || {};
+      var html = '<b>' + esc(d.message || '合并完成') + '</b>';
+      if (docs.conflicts && docs.conflicts.length) {
+        html += '<div class="hint mt">冲突文档副本：' + esc(docs.conflicts.slice(0, 5).join('；')) +
+          (docs.conflicts.length > 5 ? ' 等' : '') + '</div>';
+      }
+      if (d.pre_merge_backup) html += '<div class="hint mt">合并前本机备份：' + esc(d.pre_merge_backup) + '</div>';
+      $('mgTip').innerHTML = html;
+      $('mgBtn').disabled = false;
+      toast('合并完成，本机数据已补充');
+      loadState();
+    }).catch(function (e) {
+      $('mgTip').textContent = '合并失败：' + e;
+      $('mgBtn').disabled = false;
+    });
+  }
+  window.mergeSelected = mergeSelected;
   function exportTrades() {
     api('/api/export/trades', 'POST', {}).then(function (r) {
       var d = r.data || {};

@@ -444,6 +444,7 @@
             <button class="btn" onclick="exportBackup()">立即备份（不含密钥）</button>
             <button class="btn" onclick="exportBackupSecret()">含密钥备份</button>
             <button class="btn" onclick="openRestore()">从备份恢复</button>
+            <button class="btn" onclick="openMerge()">合并导入</button>
             <button class="btn" onclick="exportDiagnostics()">导出诊断包</button>
             <button class="btn" onclick="exportTrades()">导出持仓 CSV</button></div>
         </div>
@@ -510,6 +511,17 @@
   <div class="modal wide"><h3 id="mailSubject">合并邮件预览</h3>
     <div class="btnrow"><button class="btn sm" onclick="setMailWidth(760)">桌面宽度</button><button class="btn sm" onclick="setMailWidth(390)">手机宽度</button><button class="btn sm" onclick="closeMail()">关闭</button><span class="hint" id="mailPath"></span></div>
     <iframe id="mailFrame" style="width:760px;max-width:100%;height:70vh;border:1px solid #E3E6EC;border-radius:8px;background:#fff"></iframe>
+  </div>
+</div>
+
+<div class="modal-mask" id="mergeModal">
+  <div class="modal wide"><h3>合并导入另一台电脑备份</h3>
+    <div class="hint">只补充本机缺少的记录，不会覆盖本机配置、密钥、持仓和调度状态。相同记录自动跳过；同名但内容不同的每日文档会另存为「另一台电脑」副本。</div>
+    <div class="hint mt">先把另一台电脑生成的备份 zip 放进本机 <b>data\exports</b> 目录，再在下面选择。</div>
+    <div id="mgList" class="mt"></div>
+    <div class="btnrow"><button class="btn" onclick="closeMerge()">取消</button>
+      <button class="btn pri" id="mgBtn" onclick="mergeSelected()">开始合并</button></div>
+    <div class="hint mt" id="mgTip"></div>
   </div>
 </div>
 

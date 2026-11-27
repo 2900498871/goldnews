@@ -349,6 +349,9 @@ def make_handler(inst: Instance):
                 if p == "/api/export/backups":
                     from engine.export import list_backups
                     return _json(self, list_backups(inst))
+                if p == "/api/export/merge":
+                    from engine.merge import merge_backup
+                    return _json(self, merge_backup(inst, body.get("name") or ""))
                 if p == "/api/export/restore":
                     from engine.export import stage_restore
                     return _json(self, stage_restore(

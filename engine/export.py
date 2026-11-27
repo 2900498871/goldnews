@@ -29,6 +29,8 @@ EDGE_CANDIDATES = [
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
 ]
 
+BACKUP_PREFIXES = ("GoldDesk-备份-", "日常小助手-备份-")
+
 
 def _exports_dir(inst) -> str:
     d = os.path.join(inst.data_dir, "exports")
@@ -261,7 +263,7 @@ def _prune_backups(inst):
     keep = int((inst.cfg.get().get("storage") or {}).get("backup_keep", 10) or 10)
     try:
         files = [os.path.join(_exports_dir(inst), n) for n in os.listdir(_exports_dir(inst))
-                 if n.startswith("GoldDesk-备份-") and n.endswith(".zip")]
+                 if n.startswith(BACKUP_PREFIXES) and n.endswith(".zip")]
         files.sort(key=os.path.getmtime, reverse=True)
         for p in files[max(1, keep):]:
             os.remove(p)
@@ -273,7 +275,7 @@ def backup_zip(inst, include_secrets: bool = False, password: str = "") -> dict:
     """打包 config、数据库（热备份）与全部每日文档；可选密码加密密钥。"""
     if include_secrets and len(password or "") < 6:
         return {"ok": False, "message": "包含密钥的备份必须设置至少 6 位密码"}
-    out = _unique(os.path.join(_exports_dir(inst), "GoldDesk-备份-%s.zip" % _stamp()))
+    out = _unique(os.path.join(_exports_dir(inst), "日常小助手-备份-%s.zip" % _stamp()))
     tmpdir = tempfile.mkdtemp(prefix="golddesk-db-")
     tmpdb = os.path.join(tmpdir, "golddesk.db")
     try:
@@ -322,7 +324,7 @@ def backup_zip(inst, include_secrets: bool = False, password: str = "") -> dict:
 def list_backups(inst) -> dict:
     rows = []
     for name in os.listdir(_exports_dir(inst)):
-        if not (name.startswith("GoldDesk-备份-") and name.endswith(".zip")):
+        if not (name.startswith(BACKUP_PREFIXES) and name.endswith(".zip")):
             continue
         p = os.path.join(_exports_dir(inst), name)
         include_secrets = False

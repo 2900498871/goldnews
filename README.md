@@ -4,12 +4,13 @@
 > v1 覆盖里程碑 **M1–M3 + 部分 M4**：核心链路全部跑通，7 屏界面（含 FR-16 时段新闻研判）。
 > **本版只保留 Windows 桌面端**：手机端（Android APK）与 mobile 预览实例已移除，唯一可执行产物是 `dist/日常小助手.exe`。
 
-**2026-11-27 第十轮（14 项：可靠性 / 任务中心 / 备份恢复 / 日志与窗口）**
+**2026-11-27 第十轮（15 项：可靠性 / 任务中心 / 备份合并 / 日志与窗口）**
 
 - **单实例修正**：GUI 实例与 `--no-window` 后台实例改用两个互斥量（`Local\GoldDesk-<端口>` / `-headless`）。后台先跑时双击 GUI 不再被互斥量挡住，而是复用已有 HTTP 服务只开窗口；后台重复启动直接退出，GUI 重复启动会唤回已运行（含托盘隐藏）的窗口后退出，避免两个进程抢数据库。
 - **局域网 API 鉴权**：仅当 `--host` 不是 127.0.0.1/localhost/::1 时启用。令牌落盘 `data/api_token.txt`，所有 `/api/*`（`/api/health` 除外）校验 `X-GoldDesk-Token` 或 `?token=` / POST body `token`；本机浏览器打开的首页自动注入令牌，远程需使用启动日志里的 `?token=` 地址。
 - **过期报价不触发提醒**：到价/涨跌/MA20 提醒只接受 `quality_flag=ok` 且 `source_ts` 在 `alerts.max_age_minutes`（默认 15 分钟）内的报价；stale、cached、unknown_ts、mock/divergent 报价一律不参与。
 - **备份恢复与密钥导出**：备份新增 `backup_manifest.json`（版本、时间、库 SHA256、文档数），可选生成密码加密的 `secrets.enc`（scrypt + HMAC-SHA256）；设置页可列备份、恢复备份；恢复会先做 manifest/库哈希/`PRAGMA integrity_check`/路径穿越校验，暂存到 `data/restore_pending`，重启时把当前配置/库/文档移到 `data/pre-restore-<时间>` 后再应用。备份按 `storage.backup_keep` 保留最近 N 份。
+- **备份合并导入**：设置页新增「合并导入」，可把另一台电脑的备份补充到本机。只合并缺失的新闻/榜单/正文缓存/价格/任务记录/AI 研判/报告/文档索引等；本机配置、密钥、持仓和调度状态保持不变。相同记录跳过，同名不同内容的文档另存为「另一台电脑-时间」副本；合并前自动生成本机完整备份，失败自动回滚数据库并撤销本次复制的文档。
 - **跨天补生成**：启动 3 秒后检查最近 `daily_all.catchup_days`（默认 2）天，若某天没有文档但有本机条目，则只用本机已存条目补生成三份日报与合并文档，不重新采集、不发旧邮件；`catchup|all|<日期>` 去重，补生成标题下会标注说明。
 - **AI 每日额度预留**：`deepseek.reserved_calls_for_daily`（默认 6 次）和 `reserved_tokens_for_daily`（默认 30000）从通用研判/快报的可用额度里扣掉，只有每日文档/周期汇总（`daily=True`）能用完整上限，避免 19:41 实测撞 40 次/日上限导致综合日报退化为摘要拼贴。
 - **关闭窗口收进托盘**：WebView2 窗口的 Alt+F4/系统关闭被拦截为隐藏到托盘；顶栏新增关闭按钮、`/api/window` 的 `close` 也只隐藏；只有顶栏退出、托盘「退出程序」或 `--stop` 才真正结束服务。第一次隐藏会弹一次托盘提示。
