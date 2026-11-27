@@ -1767,6 +1767,17 @@
     }
   }
 
+  function mgPreviewLoading(on, text) {
+    var wrap = $('mgPreviewWrap');
+    if (!wrap) return;
+    if (text) $('mgLoad').textContent = text;
+    wrap.classList.toggle('loading', !!on);
+  }
+
+  function mgModalEl() {
+    return document.querySelector('#mergeModal .modal');
+  }
+
   function mgCategoryHtml(d) {
     var cats = d.categories || [];
     var html = '';
@@ -1856,12 +1867,13 @@
     mgUpdateBtn();
     if (!sections.length) {
       $('mgPreview').innerHTML = '';
+      mgPreviewLoading(false);
       $('mgTip').textContent = '请至少选择一个合并类别';
       return;
     }
     $('mgPreviewBtn').disabled = true;
     $('mgTip').textContent = '正在预览，不会写入任何数据…';
-    $('mgPreview').innerHTML = '<div class="empty">正在读取并比对备份…</div>';
+    mgPreviewLoading(true, '正在比对 ' + MG_SELECTED + '…');
     api('/api/export/merge/preview', 'POST', { name: MG_SELECTED, sections: sections }).then(function (r) {
       if (seq !== MG_PREVIEW_SEQ) return;
       $('mgPreviewBtn').disabled = false;
@@ -1869,12 +1881,17 @@
       if (!ok(r)) {
         MG_PREVIEW = null;
         $('mgPreview').innerHTML = '';
+        mgPreviewLoading(false);
         $('mgTip').textContent = '预览失败：' + (d.message || '未知错误');
         mgUpdateBtn();
         return;
       }
       MG_PREVIEW = d;
+      var modal = mgModalEl();
+      var scrollTop = modal ? modal.scrollTop : 0;
       $('mgPreview').innerHTML = mgPreviewHtml(d);
+      mgPreviewLoading(false);
+      if (modal) modal.scrollTop = scrollTop;
       $('mgTip').textContent = d.has_changes ? '预览不会写入数据，确认范围后再点“开始合并”。' : '没有可补充的数据';
       mgUpdateBtn();
     }).catch(function (e) {
@@ -1882,6 +1899,7 @@
       $('mgPreviewBtn').disabled = false;
       MG_PREVIEW = null;
       $('mgPreview').innerHTML = '';
+      mgPreviewLoading(false);
       $('mgTip').textContent = '预览失败：' + e;
       mgUpdateBtn();
     });
@@ -1892,6 +1910,7 @@
     mgStopPoll();
     if (MG_PREVIEW_TIMER) { clearTimeout(MG_PREVIEW_TIMER); MG_PREVIEW_TIMER = null; }
     $('mgTip').textContent = ''; $('mgPreview').innerHTML = '';
+    mgPreviewLoading(false);
     $('mgBarWrap').style.display = 'none'; $('mgBar').style.width = '0%'; $('mgPct').textContent = '0%';
     $('mgSections').innerHTML = mgSectionsHtml();
     if (!MG_SECTIONS_BOUND) {
@@ -1941,6 +1960,7 @@
     if (MG_BUSY) { toast('合并正在进行，请稍候'); return; }
     MG_PREVIEW_SEQ += 1;
     if (MG_PREVIEW_TIMER) { clearTimeout(MG_PREVIEW_TIMER); MG_PREVIEW_TIMER = null; }
+    mgPreviewLoading(false);
     $('mergeModal').className = 'modal-mask';
   }
   window.closeMerge = closeMerge;

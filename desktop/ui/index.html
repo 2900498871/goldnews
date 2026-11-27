@@ -520,7 +520,10 @@
     <div class="hint mt">先把另一台电脑生成的备份 zip 放进本机 <b>data\exports</b> 目录，再在下面选择。</div>
     <div id="mgList" class="mt"></div>
     <div class="mt"><b>合并范围</b><div id="mgSections" class="mt" style="display:flex;flex-wrap:wrap;gap:8px 16px"></div></div>
-    <div id="mgPreview" class="mt"></div>
+    <div class="mg-preview-wrap mt" id="mgPreviewWrap">
+      <div id="mgPreview"></div>
+      <div class="mg-load" id="mgLoad">正在读取并比对备份…</div>
+    </div>
     <div class="barrow mt" id="mgBarWrap" style="display:none"><span class="lb">合并进度</span><div class="bartrack"><div class="barfill" id="mgBar" style="width:0%"></div></div><span class="vl" id="mgPct">0%</span></div>
     <div class="hint mt" id="mgTip"></div>
     <div class="btnrow" style="position:sticky;bottom:-20px;background:#fff;padding-top:12px;border-top:1px solid var(--line);z-index:2"><button class="btn" onclick="closeMerge()">取消</button>
