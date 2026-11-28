@@ -17,6 +17,7 @@
       <span class="chip line" id="statusChip">连接中</span>
       <button class="btn sm pri" onclick="quickFetch('fetch_and_analyze')">一键获取</button>
       <button class="btn sm" onclick="runSelfcheck()">自检</button>
+      <button class="btn sm" id="msCloseBtn" style="display:none" onclick="closeMultiSitePanel()">关闭官方页面</button>
       <button class="btn sm" id="quitBtn" onclick="quitApp()">退出</button>
       <div class="winctrls" id="winCtrls">
         <button class="winbtn" id="winTray" title="收进托盘（双击托盘图标恢复）" onclick="hideToTray()">▾</button>
@@ -241,45 +242,39 @@
 
       <!-- 5.6 多平台中心 -->
       <section class="page" id="page-multisite">
-        <div class="phead"><div><h2>多平台中心</h2><p>B站 / 贴吧 / 微博 / 知乎 / 抖音 · 热榜与正文都在本页</p></div>
-          <div class="acts"><span class="tag blue">应用内阅读</span></div></div>
-        <div class="compliance">不再新开窗口、不跳系统浏览器。点击下方按钮，热榜会直接加载在本页；点条目也在本页看正文。正文读取复用「设置 → 平台登录」里已保存的登录状态，不会在这里重新登录。</div>
+        <div class="phead"><div><h2>多平台中心</h2><p>B站 / 贴吧 / 微博 / 知乎 / 抖音 · 官方页面嵌入程序内容区</p></div>
+          <div class="acts"><span class="tag blue">内嵌官方页面</span></div></div>
+        <div class="compliance">点击下方平台卡片，平台官方首页会加载到当前窗口的内容区，左侧导航和顶栏保留；不新开窗口、不跳系统浏览器。登录、扫码、搜索、视频和帖子都在官方页面里操作，登录态直接复用「设置 → 平台登录」。</div>
         <div class="msgrid">
           <div class="mscard" style="--c:#FB7299">
             <div class="mshead"><div class="mslogo">B</div><div class="msmeta"><h3>B站</h3><small>bilibili.com</small></div></div>
-            <p>B站热榜与搜索相关内容；正文读取复用设置页的 B站 登录。</p>
-            <div class="msfoot"><span class="tag line">热榜 + 正文</span><button class="btn sm pri" data-ms-btn="bilibili" onclick="openMultiSite('bilibili')">打开 B站</button></div>
+            <p>官方首页、热门、搜索和视频；登录态复用设置页的 B站 登录。</p>
+            <div class="msfoot"><span class="tag line">官方页面</span><button class="btn sm pri" data-ms-btn="bilibili" onclick="openMultiSite('bilibili')">打开 B站</button></div>
           </div>
           <div class="mscard" style="--c:#3385FF">
             <div class="mshead"><div class="mslogo">贴</div><div class="msmeta"><h3>贴吧</h3><small>tieba.baidu.com</small></div></div>
-            <p>贴吧热议话题；没有独立登录，共用设置页的百度登录。</p>
-            <div class="msfoot"><span class="tag line">热榜 + 正文</span><button class="btn sm pri" data-ms-btn="tieba" onclick="openMultiSite('tieba')">打开 贴吧</button></div>
+            <p>官方首页、进吧、帖子和搜索；共用设置页的百度登录。</p>
+            <div class="msfoot"><span class="tag line">官方页面</span><button class="btn sm pri" data-ms-btn="tieba" onclick="openMultiSite('tieba')">打开 贴吧</button></div>
           </div>
           <div class="mscard" style="--c:#E6162D">
             <div class="mshead"><div class="mslogo">微</div><div class="msmeta"><h3>微博</h3><small>weibo.com</small></div></div>
-            <p>微博热搜；正文读取复用设置页的微博登录。</p>
-            <div class="msfoot"><span class="tag line">热榜 + 正文</span><button class="btn sm pri" data-ms-btn="weibo" onclick="openMultiSite('weibo')">打开 微博</button></div>
+            <p>官方首页、热搜、搜索和发博；登录态复用设置页的微博登录。</p>
+            <div class="msfoot"><span class="tag line">官方页面</span><button class="btn sm pri" data-ms-btn="weibo" onclick="openMultiSite('weibo')">打开 微博</button></div>
           </div>
           <div class="mscard" style="--c:#1772F6">
             <div class="mshead"><div class="mslogo">知</div><div class="msmeta"><h3>知乎</h3><small>zhihu.com</small></div></div>
-            <p>知乎热榜；正文读取复用设置页的知乎登录。</p>
-            <div class="msfoot"><span class="tag line">热榜 + 正文</span><button class="btn sm pri" data-ms-btn="zhihu" onclick="openMultiSite('zhihu')">打开 知乎</button></div>
+            <p>官方首页、热榜、问题和回答；登录态复用设置页的知乎登录。</p>
+            <div class="msfoot"><span class="tag line">官方页面</span><button class="btn sm pri" data-ms-btn="zhihu" onclick="openMultiSite('zhihu')">打开 知乎</button></div>
           </div>
           <div class="mscard" style="--c:#161823">
             <div class="mshead"><div class="mslogo">抖</div><div class="msmeta"><h3>抖音</h3><small>douyin.com</small></div></div>
-            <p>抖音热点榜；正文读取复用设置页的抖音登录。</p>
-            <div class="msfoot"><span class="tag line">热榜 + 正文</span><button class="btn sm pri" data-ms-btn="douyin" onclick="openMultiSite('douyin')">打开 抖音</button></div>
+            <p>官方首页、推荐、搜索和视频；登录态复用设置页的抖音登录。</p>
+            <div class="msfoot"><span class="tag line">官方页面</span><button class="btn sm pri" data-ms-btn="douyin" onclick="openMultiSite('douyin')">打开 抖音</button></div>
           </div>
         </div>
-        <div class="card mt" id="msFeedCard">
-          <div class="ch"><h3 id="msFeedTitle">平台内容</h3><span class="sub" id="msFeedSub">点上方按钮打开</span>
-            <div class="acts"><span class="tag line" id="msFeedLogin">—</span><button class="btn sm" id="msFeedRefresh" onclick="reloadMultiFeed()">刷新</button></div>
-          </div>
-          <div id="msFeedList" class="msfeed"><div class="empty">点击上方任意“打开 …”按钮，热榜会显示在这里，不会新开窗口。</div></div>
-        </div>
-        <div class="card mt"><div class="ch"><h3>登录与限制</h3><span class="sub">设置页登录 · 不重复登录</span></div>
-          <div class="note">正文读取使用设置页保存的平台 Cookie；设置页未登录时，这里只显示公开热榜，并提示去设置页登录，不会自动弹登录窗口。平台官方页面禁止被主界面 iframe 嵌入，所以本页以热榜 + 正文阅读呈现，不再打开新窗口。</div>
-          <div class="hint mt">贴吧复用设置页的百度登录；B站、微博、知乎、抖音若要求扫码或短信验证码，只在设置页完成。</div>
+        <div class="card mt"><div class="ch"><h3>官方页面与登录</h3><span class="sub">内嵌窗口 · 复用设置页登录</span></div>
+          <div class="note">打开后，官方页面会覆盖当前内容区；点顶栏右侧「关闭官方页面」即可回到平台卡片。官方站点不接受被主界面 iframe 嵌入，所以这里用同一个 WebView2 用户目录的独立窗口挂进主窗口，既保留官方页面完整交互，又不产生新的任务栏窗口。</div>
+          <div class="hint mt">登录态直接复用设置页保存的 Cookie；贴吧复用百度登录。若设置页未登录，官方页面会显示它自己的登录入口，不会在这里另建一套登录状态。</div>
         </div>
       </section>
 
@@ -645,12 +640,6 @@
     <div class="ch mt"><h3>错误原因</h3></div>
     <div id="tdError" class="note">无</div>
   </div>
-</div>
-
-<div class="modal-mask" id="msReader">
-  <div class="modal wide"><div class="ch"><h3 id="msReaderTitle">正文</h3><span class="sub" id="msReaderMeta">—</span>
-    <div class="acts"><button class="btn sm" onclick="closeMsReader()">关闭</button></div></div>
-    <div id="msReaderBody" class="docbody msreaderbody"></div></div>
 </div>
 
 <div class="modal-mask" id="setupModal">

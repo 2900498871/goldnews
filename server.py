@@ -278,20 +278,15 @@ def make_handler(inst: Instance):
                     else:
                         return _json(self, {"ok": False, "message": "未知平台操作"}, 404)
                     return _json(self, r)
-                if p == "/api/multisite/feed":
-                    from engine.multisite import feed as multisite_feed
+                if p == "/api/multisite/show":
+                    from engine.multisite import show as multisite_show
                     site = str(body.get("site") or "").strip().lower()
                     if not site:
                         return _json(self, {"ok": False, "message": "缺少平台参数"}, 400)
-                    return _json(self, multisite_feed(inst.data_dir, site))
-                if p == "/api/multisite/read":
-                    from engine.multisite import read as multisite_read
-                    site = str(body.get("site") or "").strip().lower()
-                    url = str(body.get("url") or "").strip()
-                    title = str(body.get("title") or "")
-                    if not site or not url:
-                        return _json(self, {"ok": False, "message": "缺少平台或链接"}, 400)
-                    return _json(self, multisite_read(inst.data_dir, site, url, title))
+                    return _json(self, multisite_show(inst.data_dir, site))
+                if p == "/api/multisite/hide":
+                    from engine.multisite import hide as multisite_hide
+                    return _json(self, multisite_hide())
                 if p == "/api/window":
                     if os.name != "nt":
                         return _json(self, {"ok": False, "message": "仅 Windows 桌面端支持窗口控制"})

@@ -335,6 +335,9 @@ def _api():
 _WV = None             # pywebview.Window
 _WV_HOST = "edge"      # webview | edge
 _WV_RESTORE = None     # 最大化前的窗口矩形 (l, t, r, b)
+_SITE_WV = None        # 多平台中心内嵌官方页面的隐藏子窗口
+_SITE_OPEN = False
+_SITE_TITLE = "日常小助手 · 官方页面"
 _WV_ZOOM = False       # 自管的最大化状态
 _WV_ALLOW_CLOSE = False
 _TRAY_HINTED = False
@@ -358,6 +361,167 @@ def _wv_hwnd() -> int | None:
         return int(h.ToInt64()) if hasattr(h, "ToInt64") else int(h)
     except Exception:
         return None
+
+
+def _site_hwnd() -> int | None:
+    """内嵌官方页面窗口句柄；隐藏窗口也有 HWND。"""
+    if _SITE_WV is None:
+        return None
+    try:
+        h = _SITE_WV.native.Handle
+        return int(h.ToInt64()) if hasattr(h, "ToInt64") else int(h)
+    except Exception:
+        pass
+    api = _api()
+    if not api:
+        return None
+    found = []
+
+    def cb(hwnd, _):
+        try:
+            n = api.u32.GetWindowTextLengthW(hwnd)
+            if n <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(n + 1)
+            api.u32.GetWindowTextW(hwnd, buf, n + 1)
+            if buf.value == _SITE_TITLE:
+                found.append(hwnd)
+                return False
+        except Exception:
+            pass
+        return True
+
+    api.u32.EnumWindows(api.WNDENUMPROC(cb), 0)
+    return found[0] if found else None
+
+
+def _site_geometry() -> tuple[int, int, int, int] | None:
+    """内容区（顶栏下方、侧栏右侧）在客户区里的物理像素矩形。"""
+    main = _wv_hwnd()
+    api = _api()
+    if not main or not api:
+        return None
+    rc = wintypes.RECT()
+    if not api.u32.GetClientRect(main, ctypes.byref(rc)):
+        return None
+    dpi = 96
+    try:
+        dpi = int(api.u32.GetDpiForWindow(main)) or 96
+    except Exception:
+        pass
+    scale = dpi / 96.0
+    # 与 style.css 保持一致：顶栏 56px；侧栏常规 206px，窄窗口 170px
+    side = 206 if rc.right / scale >= 1200 else 170
+    x = int(round(side * scale))
+    y = int(round(56 * scale))
+    w = max(120, int(rc.right) - x)
+    h = max(120, int(rc.bottom) - y)
+    return x, y, w, h
+
+
+def _site_reposition(resize: bool = False) -> None:
+    main = _wv_hwnd()
+    site = _site_hwnd()
+    api = _api()
+    if not main or not site or not api:
+        return
+    geom = _site_geometry()
+    if not geom:
+        return
+    x, y, w, h = geom
+    # 先恢复父子关系：WebView2 的 show()/resize() 会把窗口重新变成顶层窗口
+    try:
+        api.u32.SetParent(site, main)
+    except Exception:
+        pass
+    api.u32.SetWindowPos(site, 0, x, y, w, h,
+                         api.SWP_NOACTIVATE | api.SWP_SHOWWINDOW)
+    if resize and _SITE_WV is not None:
+        try:
+            _SITE_WV.resize(w, h)
+        except Exception:
+            pass
+
+
+def _site_watch() -> None:
+    """窗口拖动/最大化后，让内嵌官方页面跟住内容区。"""
+    last = None
+    while _SITE_WV is not None:
+        if _SITE_OPEN:
+            geom = _site_geometry()
+            if geom:
+                # 每次校正父子关系与位置；尺寸变化时同步通知 WebView2 重绘
+                _site_reposition(resize=(geom != last))
+                last = geom
+        else:
+            last = None
+        time.sleep(0.45)
+
+
+def _site_style_child(hwnd: int) -> None:
+    api = _api()
+    if not api:
+        return
+    style = api.u32.GetWindowLongW(hwnd, api.GWL_STYLE)
+    style = (style & ~(api.WS_POPUP | api.WS_CAPTION | 0x00040000 |
+                       api.WS_SYSMENU | api.WS_MINIMIZEBOX | api.WS_MAXIMIZEBOX)) | api.WS_CHILD
+    api.u32.SetWindowLongW(hwnd, api.GWL_STYLE, style)
+
+
+def show_site_panel(url: str) -> dict:
+    """把官方页面嵌进主窗口内容区；不产生任务栏窗口，不另建浏览器配置。"""
+    global _SITE_OPEN
+    if _SITE_WV is None:
+        return {"ok": False, "message": "当前版本没有可用的 WebView2，无法内嵌官方页面"}
+    main = _wv_hwnd()
+    site = _site_hwnd()
+    api = _api()
+    if not main or not site:
+        return {"ok": False, "message": "没有找到官方页面窗口句柄"}
+    _SITE_OPEN = True
+    try:
+        # 先把窗口挪到屏幕外再 show：show() 会把 WebView2 重置成顶层窗口，
+        # 必须在 show() 之后再 SetParent，否则官方页面会浮在程序外面。
+        if api:
+            api.u32.SetWindowPos(site, 0, -32000, -32000, 1200, 820,
+                                 api.SWP_NOACTIVATE)
+        _SITE_WV.show()
+        if api:
+            for _ in range(20):
+                if api.u32.IsWindowVisible(site):
+                    break
+                time.sleep(0.05)
+        site = _site_hwnd()
+        geom = _site_geometry()
+        if geom:
+            _SITE_WV.resize(geom[2], geom[3])
+        if not site:
+            raise RuntimeError("官方页面窗口句柄丢失")
+        _site_style_child(site)
+        _site_reposition()          # 内部会 SetParent 回主窗口
+        _SITE_WV.load_url(url)
+    except Exception as e:
+        _SITE_OPEN = False
+        return {"ok": False, "message": "%s: %s" % (type(e).__name__, e)}
+    if api:
+        api.u32.ShowWindow(site, 5)          # SW_SHOW
+        api.u32.UpdateWindow(site)
+    return {"ok": True, "message": "已在程序内打开官方页面"}
+
+
+def hide_site_panel() -> dict:
+    global _SITE_OPEN
+    _SITE_OPEN = False
+    site = _site_hwnd()
+    api = _api()
+    if site and api:
+        api.u32.ShowWindow(site, 0)          # SW_HIDE
+    if _SITE_WV is not None:
+        try:
+            _SITE_WV.hide()
+        except Exception:
+            pass
+    return {"ok": True, "message": "已关闭官方页面"}
 
 
 def _wv_maximized() -> bool:
@@ -461,6 +625,13 @@ def _wv_action(action: str) -> dict:
         return _wv_action("hide")
     if action in ("quit", "exit"):
         _wv_allow_close()
+        global _SITE_WV
+        if _SITE_WV is not None:
+            try:
+                _SITE_WV.destroy()
+            except Exception:
+                pass
+            _SITE_WV = None
         _WV.destroy()
         return {"ok": True}
     # caption / refresh / move 在 WebView2 宿主下由系统原生处理，无需宿主介入
@@ -564,7 +735,7 @@ def _wv_heal() -> bool:
 def open_webview_window(url: str, title: str, width: int = 1440, height: int = 900,
                         icon_path: str | None = None, data_dir: str | None = None):
     """在主线程创建 WebView2 无边框窗口并阻塞运行，窗口关闭后返回。"""
-    global _WV, _WV_HOST, _WV_ALLOW_CLOSE, _TRAY_HINTED
+    global _WV, _WV_HOST, _WV_ALLOW_CLOSE, _TRAY_HINTED, _SITE_WV, _SITE_OPEN
     _WV_ALLOW_CLOSE = False
     _TRAY_HINTED = False
     import webview
@@ -598,7 +769,22 @@ def open_webview_window(url: str, title: str, width: int = 1440, height: int = 9
     except Exception:
         pass
     print("已打开 WebView2 无边框窗口：%s" % url, flush=True)
+    # 多平台中心的官方页面预先建好并隐藏，点击平台时再挂到主窗口内容区。
+    # 与主窗口同一个 webview.start(storage_path=...)，所以直接复用设置页登录 Cookie。
+    try:
+        _SITE_WV = webview.create_window(
+            _SITE_TITLE, "about:blank", width=1200, height=820, hidden=True,
+            frameless=True, easy_drag=False, shadow=False, text_select=True,
+            zoomable=True, background_color="#FFFFFF")
+        _SITE_OPEN = False
+        threading.Thread(target=_site_watch, daemon=True).start()
+        print("已准备多平台中心官方页面内嵌窗口", flush=True)
+    except Exception as e:
+        _SITE_WV = None
+        print("多平台中心内嵌窗口创建失败：%s: %s" % (type(e).__name__, e), flush=True)
     webview.start(debug=False, private_mode=False, storage_path=storage, icon=icon_path)
+    _SITE_WV = None
+    _SITE_OPEN = False
     _WV = None
     _WV_HOST = "edge"
     _WV_RESTORE = None

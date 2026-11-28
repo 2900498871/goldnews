@@ -438,7 +438,7 @@
   window.startPlatformPoll = startPlatformPoll;
   window.stopPlatformPoll = stopPlatformPoll;
 
-  /* ---------------- 多平台中心（应用内热榜 + 正文） ---------------- */
+  /* ---------------- 多平台中心（内嵌官方页面） ---------------- */
   var MS_META = {
     bilibili: { name: 'B站', label: '打开 B站' },
     tieba: { name: '贴吧', label: '打开 贴吧' },
@@ -446,7 +446,7 @@
     zhihu: { name: '知乎', label: '打开 知乎' },
     douyin: { name: '抖音', label: '打开 抖音' }
   };
-  var MS_FEED_SITE = '', MS_FEED_BUSY = false, MS_READ_BUSY = false;
+  var MS_BUSY = false, MS_OPEN = false, MS_SITE = '';
   function msButtons(key) {
     return document.querySelectorAll('[data-ms-btn="' + key + '"]');
   }
@@ -455,105 +455,51 @@
     var btns = msButtons(key);
     for (var i = 0; i < btns.length; i++) {
       btns[i].disabled = !!busy;
-      btns[i].textContent = busy ? '读取中…' : meta.label;
+      btns[i].textContent = busy ? '打开中…' : meta.label;
     }
   }
-  function renderMultiFeed(d) {
-    var items = d.items || [];
-    $('msFeedTitle').textContent = (d.name || '平台') + ' · 热榜';
-    $('msFeedSub').textContent = items.length ? ('共 ' + items.length + ' 条 · ' + (d.status || 'ok')) : ('暂无内容 · ' + (d.status || '—'));
-    var login = d.login || {};
-    $('msFeedLogin').className = 'tag ' + (login.logged_in ? 'blue' : 'line');
-    $('msFeedLogin').textContent = login.logged_in ? ('已复用设置页' + (login.name || '') + '登录') :
-      ('设置页' + (login.name || '') + '未登录');
-    if (!items.length) {
-      $('msFeedList').innerHTML = '<div class="empty">这个平台暂时没取到热榜。可以稍后点“刷新”，或到设置页确认网络。</div>';
-      return;
-    }
-    var html = '';
-    for (var i = 0; i < items.length; i++) {
-      var it = items[i] || {};
-      html += '<div class="msitem" data-url="' + esc(it.url || '') + '" data-title="' + esc(it.title || '') +
-        '" onclick="openMultiItem(\'' + esc(d.site || MS_FEED_SITE) + '\', this.dataset.url, this.dataset.title)">' +
-        '<div class="msrank">' + esc(it.rank || (i + 1)) + '</div>' +
-        '<div class="msmain"><h4>' + esc(it.title || '') + '</h4>' +
-        (it.summary ? '<p>' + esc(it.summary) + '</p>' : '') + '</div>' +
-        '<div class="mshot">' + esc(it.hot || '') + '</div></div>';
-    }
-    $('msFeedList').innerHTML = html;
-  }
-  function loadMultiFeed(key) {
-    var meta = MS_META[key]; if (!meta || MS_FEED_BUSY) return;
-    MS_FEED_SITE = key; MS_FEED_BUSY = true; msBusy(key, true);
-    $('msFeedTitle').textContent = meta.name + ' · 热榜';
-    $('msFeedSub').textContent = '读取中…';
-    $('msFeedLogin').className = 'tag line'; $('msFeedLogin').textContent = '读取登录态';
-    $('msFeedList').innerHTML = '<div class="empty">正在加载' + esc(meta.name) + '热榜，不会打开新窗口…</div>';
-    var card = $('msFeedCard');
-    if (card && card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    api('/api/multisite/feed', 'POST', { site: key }).then(function (r) {
-      var d = (r && r.data) || {};
-      if (d.ok === false) {
-        $('msFeedSub').textContent = '读取失败';
-        $('msFeedList').innerHTML = '<div class="empty">' + esc(d.message || '热榜读取失败') + '</div>';
-        toast(d.message || (meta.name + '热榜读取失败'));
-      } else {
-        renderMultiFeed(d);
-      }
-      MS_FEED_BUSY = false; msBusy(key, false);
-    }).catch(function () {
-      $('msFeedSub').textContent = '读取失败';
-      $('msFeedList').innerHTML = '<div class="empty">请求失败，请确认程序后台服务在运行。</div>';
-      toast(meta.name + '热榜读取失败');
-      MS_FEED_BUSY = false; msBusy(key, false);
-    });
+  function setMsPanelOpen(open) {
+    MS_OPEN = !!open;
+    var btn = $('msCloseBtn');
+    if (btn) btn.style.display = open ? '' : 'none';
   }
   function openMultiSite(key) {
-    if (!MS_META[key] || MS_FEED_BUSY) return;
-    loadMultiFeed(key);
-  }
-  function reloadMultiFeed() {
-    if (MS_FEED_SITE) loadMultiFeed(MS_FEED_SITE);
-  }
-  function openMultiItem(site, url, title) {
-    if (MS_READ_BUSY || !url) return;
-    MS_READ_BUSY = true;
-    $('msReaderTitle').textContent = title || '正文';
-    $('msReaderMeta').textContent = '正在用设置页登录态读取…';
-    $('msReaderBody').innerHTML = '<div class="empty">不会打开新窗口，正在后台读取正文…</div>';
-    $('msReader').classList.add('show');
-    api('/api/multisite/read', 'POST', { site: site, url: url, title: title || '' }).then(function (r) {
+    var meta = MS_META[key];
+    if (!meta || MS_BUSY) return;
+    MS_BUSY = true; msBusy(key, true);
+    api('/api/multisite/show', 'POST', { site: key }).then(function (r) {
       var d = (r && r.data) || {};
-      if (d.ok) {
-        $('msReaderMeta').textContent = (d.login_name || '') + ' · ' + (d.chars || 0) + ' 字';
-        $('msReaderBody').textContent = d.content || '';
+      if (d.ok === false) {
+        toast(d.message || ('打开' + meta.name + '官方页面失败'));
+        setMsPanelOpen(false);
       } else {
-        $('msReaderMeta').textContent = d.need_login ? '设置页未登录' : '读取失败';
-        var msg = esc(d.message || '正文读取失败');
-        if (d.need_login) {
-          $('msReaderBody').innerHTML = '<div class="empty">' + msg +
-            '<div class="btnrow" style="justify-content:center;margin-top:12px">' +
-            '<button class="btn sm pri" onclick="closeMsReader();go(\'settings\')">去设置页登录</button></div></div>';
-        } else {
-          $('msReaderBody').innerHTML = '<div class="empty">' + msg + '</div>';
-        }
+        MS_SITE = key;
+        setMsPanelOpen(true);
+        toast(d.message || ('已在程序内打开' + meta.name + '官方页面'));
       }
-      MS_READ_BUSY = false;
+      MS_BUSY = false; msBusy(key, false);
     }).catch(function () {
-      $('msReaderMeta').textContent = '读取失败';
-      $('msReaderBody').innerHTML = '<div class="empty">请求失败，请确认程序后台服务在运行。</div>';
-      MS_READ_BUSY = false;
+      toast('打开' + meta.name + '官方页面失败，请确认程序窗口已启动');
+      setMsPanelOpen(false);
+      MS_BUSY = false; msBusy(key, false);
     });
   }
-  function closeMsReader() {
-    $('msReader').classList.remove('show');
-    MS_READ_BUSY = false;
+  function closeMultiSitePanel() {
+    if (MS_BUSY) return;
+    api('/api/multisite/hide', 'POST', {}).then(function (r) {
+      var d = (r && r.data) || {};
+      if (d.ok === false) toast(d.message || '关闭官方页面失败');
+    }).catch(function () {});
+    MS_SITE = '';
+    setMsPanelOpen(false);
   }
   window.openMultiSite = openMultiSite;
-  window.reloadMultiFeed = reloadMultiFeed;
-  window.openMultiItem = openMultiItem;
-  window.closeMsReader = closeMsReader;
+  window.closeMultiSitePanel = closeMultiSitePanel;
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && MS_OPEN) closeMultiSitePanel();
+  });
   function go(page) {
+    if (MS_OPEN) closeMultiSitePanel();
     var pages = document.querySelectorAll('.page');
     for (var i = 0; i < pages.length; i++) pages[i].className = 'page' + (pages[i].id === 'page-' + page ? ' active' : '');
     var navs = document.querySelectorAll('.nav,.tab');
@@ -2880,7 +2826,7 @@
   // 支持 ?page=daily&kind=mil 直达某个每日模块页签
   var km = /[?&]kind=(news|brief|mil)/i.exec(location.search);
   if (km) setDailyKind(km[1].toLowerCase());
-  // 支持 ?page=multisite&ms=bilibili 直达某个平台热榜（不打开新窗口）
+  // 支持 ?page=multisite&ms=bilibili 直达某个平台官方页面（嵌入当前窗口，不新建窗口）
   var mm = /[?&]ms=(bilibili|tieba|weibo|zhihu|douyin)/i.exec(location.search);
   if (mm) {
     var msKey = mm[1].toLowerCase();
