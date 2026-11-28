@@ -217,6 +217,9 @@ def make_handler(inst: Instance):
                 if p == "/api/platforms/status":
                     from engine.platforms import status as platform_status
                     return _json(self, platform_status(inst.data_dir))
+                if p == "/api/multisite/sites":
+                    from engine.multisite import sites as multisite_sites
+                    return _json(self, multisite_sites())
                 if p == "/api/selfcheck":
                     return _json(self, selfcheck(inst.cfg, inst.db, inst.pipeline))
                 if p == "/api/report":
@@ -239,8 +242,8 @@ def make_handler(inst: Instance):
             if p.startswith("/api/") and not self._token_ok(q=urllib.parse.parse_qs(u.query), body=body):
                 return self._deny_token()
             try:
-                # 仅允许本机调用：给无控制台的 exe 提供干净退出入口；平台登录会弹窗
-                if p in ("/api/shutdown", "/api/window") or p.startswith("/api/platforms/"):
+                # 仅允许本机调用：给无控制台的 exe 提供干净退出入口；平台登录和多平台窗口会弹窗
+                if p in ("/api/shutdown", "/api/window") or p.startswith("/api/platforms/") or p.startswith("/api/multisite/"):
                     if self.client_address[0] not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
                         return _json(self, {"ok": False, "message": "仅允许本机操作"}, 403)
                     origin = self.headers.get("Origin") or ""
@@ -275,6 +278,12 @@ def make_handler(inst: Instance):
                     else:
                         return _json(self, {"ok": False, "message": "未知平台操作"}, 404)
                     return _json(self, r)
+                if p == "/api/multisite/open":
+                    from engine.multisite import open_site
+                    site = str(body.get("site") or "").strip().lower()
+                    if not site:
+                        return _json(self, {"ok": False, "message": "缺少平台参数"}, 400)
+                    return _json(self, open_site(inst.data_dir, site))
                 if p == "/api/window":
                     if os.name != "nt":
                         return _json(self, {"ok": False, "message": "仅 Windows 桌面端支持窗口控制"})
@@ -295,6 +304,11 @@ def make_handler(inst: Instance):
                                 close_all()
                             except Exception:
                                 pass
+                            try:
+                                from engine.multisite import close_all as multisite_close_all
+                                multisite_close_all()
+                            except Exception:
+                                pass
                             threading.Timer(0.8, self.server.shutdown).start()
                             inst.log.info("收到退出指令，窗口与后台服务同步停止")
                     except Exception as e:
@@ -302,6 +316,11 @@ def make_handler(inst: Instance):
                     return _json(self, r)
                 if p == "/api/shutdown":
                     srv = self.server
+                    try:
+                        from engine.multisite import close_all as multisite_close_all
+                        multisite_close_all()
+                    except Exception:
+                        pass
                     threading.Timer(0.4, srv.shutdown).start()
                     inst.log.info("收到本机退出请求，调度器与 HTTP 服务即将停止")
                     return _json(self, {"ok": True, "message": "本端服务正在退出"})

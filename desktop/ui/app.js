@@ -438,6 +438,39 @@
   window.startPlatformPoll = startPlatformPoll;
   window.stopPlatformPoll = stopPlatformPoll;
 
+  /* ---------------- 多平台中心（官方页面窗口） ---------------- */
+  var MS_META = {
+    bilibili: { name: 'B站', label: '打开 B站' },
+    tieba: { name: '贴吧', label: '打开 贴吧' },
+    weibo: { name: '微博', label: '打开 微博' },
+    zhihu: { name: '知乎', label: '打开 知乎' },
+    douyin: { name: '抖音', label: '打开 抖音' }
+  };
+  function msButtons(key) {
+    return document.querySelectorAll('[data-ms-btn="' + key + '"]');
+  }
+  function msBusy(key, busy) {
+    var meta = MS_META[key]; if (!meta) return;
+    var btns = msButtons(key);
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].disabled = !!busy;
+      btns[i].textContent = busy ? '正在打开…' : meta.label;
+    }
+  }
+  function openMultiSite(key) {
+    var meta = MS_META[key]; if (!meta) return;
+    msBusy(key, true);
+    api('/api/multisite/open', 'POST', { site: key }).then(function (r) {
+      var d = (r && r.data) || {};
+      toast(d.message || (d.ok === false ? ('打开' + meta.name + '失败') : ('已打开' + meta.name + '官方页面')));
+      msBusy(key, false);
+    }).catch(function () {
+      toast('打开' + meta.name + '官方页面失败，请检查程序窗口是否已启动');
+      msBusy(key, false);
+    });
+  }
+  window.openMultiSite = openMultiSite;
+
   function go(page) {
     var pages = document.querySelectorAll('.page');
     for (var i = 0; i < pages.length; i++) pages[i].className = 'page' + (pages[i].id === 'page-' + page ? ' active' : '');

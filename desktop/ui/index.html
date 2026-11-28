@@ -36,6 +36,16 @@
       <button class="nav" data-page="holding" onclick="go('holding')"><span>◉</span>持仓与交易</button>
       <button class="nav" data-page="strategy" onclick="go('strategy')"><span>◇</span>策略与情景</button>
       <button class="nav" data-page="daily" onclick="go('daily')"><span>▤</span>每日新闻</button>
+      <div class="navgroup">
+        <button class="nav" data-page="multisite" onclick="go('multisite')"><span>▥</span>多平台中心</button>
+        <div class="navsub" aria-label="多平台子模块">
+          <button type="button" data-ms="bilibili" onclick="go('multisite');openMultiSite('bilibili')">B站</button>
+          <button type="button" data-ms="tieba" onclick="go('multisite');openMultiSite('tieba')">贴吧</button>
+          <button type="button" data-ms="weibo" onclick="go('multisite');openMultiSite('weibo')">微博</button>
+          <button type="button" data-ms="zhihu" onclick="go('multisite');openMultiSite('zhihu')">知乎</button>
+          <button type="button" data-ms="douyin" onclick="go('multisite');openMultiSite('douyin')">抖音</button>
+        </div>
+      </div>
       <button class="nav" data-page="tasks" onclick="go('tasks')"><span>☷</span>任务中心</button>
       <button class="nav" data-page="settings" onclick="go('settings')"><span>⚙</span>设置</button>
       <div class="side-foot">
@@ -238,7 +248,45 @@
           <div id="dlDocs"><div class="empty">尚无记录</div></div></div>
       </section>
 
-      <!-- 5.6 任务中心 -->
+      <!-- 5.6 多平台中心 -->
+      <section class="page" id="page-multisite">
+        <div class="phead"><div><h2>多平台中心</h2><p>B站 / 贴吧 / 微博 / 知乎 / 抖音 · 官方页面在本程序窗口内打开</p></div>
+          <div class="acts"><span class="tag blue">官方页面模式</span></div></div>
+        <div class="compliance">五个子模块都打开平台官方网页，使用本机 WebView2 的正常浏览器会话和持久化 Cookie；不套壳、不注入脚本、不抓取页面。登录、扫码、短信验证码和浏览都由平台官方页面自己完成，减少被风控拦截的概率。</div>
+        <div class="msgrid">
+          <div class="mscard" style="--c:#FB7299">
+            <div class="mshead"><div class="mslogo">B</div><div class="msmeta"><h3>B站</h3><small>www.bilibili.com</small></div></div>
+            <p>首页推荐、热门视频、分区和搜索。登录、播放、评论都在官方页面完成。</p>
+            <div class="msfoot"><span class="tag line">官方站点</span><button class="btn sm pri" data-ms-btn="bilibili" onclick="openMultiSite('bilibili')">打开 B站</button></div>
+          </div>
+          <div class="mscard" style="--c:#3385FF">
+            <div class="mshead"><div class="mslogo">贴</div><div class="msmeta"><h3>贴吧</h3><small>tieba.baidu.com</small></div></div>
+            <p>贴吧首页、吧内帖子、搜索和回复。使用百度账号在官方页面登录。</p>
+            <div class="msfoot"><span class="tag line">官方站点</span><button class="btn sm pri" data-ms-btn="tieba" onclick="openMultiSite('tieba')">打开 贴吧</button></div>
+          </div>
+          <div class="mscard" style="--c:#E6162D">
+            <div class="mshead"><div class="mslogo">微</div><div class="msmeta"><h3>微博</h3><small>weibo.com</small></div></div>
+            <p>首页信息流、热搜和搜索。登录、发博、评论都在官方页面完成。</p>
+            <div class="msfoot"><span class="tag line">官方站点</span><button class="btn sm pri" data-ms-btn="weibo" onclick="openMultiSite('weibo')">打开 微博</button></div>
+          </div>
+          <div class="mscard" style="--c:#1772F6">
+            <div class="mshead"><div class="mslogo">知</div><div class="msmeta"><h3>知乎</h3><small>www.zhihu.com</small></div></div>
+            <p>首页推荐、问题与回答、搜索。登录和互动都在官方页面完成。</p>
+            <div class="msfoot"><span class="tag line">官方站点</span><button class="btn sm pri" data-ms-btn="zhihu" onclick="openMultiSite('zhihu')">打开 知乎</button></div>
+          </div>
+          <div class="mscard" style="--c:#161823">
+            <div class="mshead"><div class="mslogo">抖</div><div class="msmeta"><h3>抖音</h3><small>www.douyin.com</small></div></div>
+            <p>首页推荐、视频和搜索。登录、点赞、评论都在官方页面完成。</p>
+            <div class="msfoot"><span class="tag line">官方站点</span><button class="btn sm pri" data-ms-btn="douyin" onclick="openMultiSite('douyin')">打开 抖音</button></div>
+          </div>
+        </div>
+        <div class="card mt"><div class="ch"><h3>使用说明</h3><span class="sub">官方页面 · 独立应用窗口</span></div>
+          <div class="note">点击子模块会打开一个属于本程序的官方页面窗口，不跳系统浏览器；同一平台已经打开时会提示切换，不会重复打开。登录态按平台保存在本机浏览器配置，关闭窗口后仍保留，与设置页的应用内登录互不影响；平台要求扫码、短信验证码或图形验证码时，按官方页面提示完成即可。</div>
+          <div class="hint mt">说明：官方页面不能嵌入主界面 iframe（平台会拒绝跨域嵌入），所以使用独立窗口；窗口标题会显示「日常小助手 · 多平台中心 · 平台名」，便于在任务栏识别。</div>
+        </div>
+      </section>
+
+      <!-- 5.7 任务中心 -->
       <section class="page" id="page-tasks">
         <div class="phead"><div><h2>任务中心</h2><p id="taskSub">定时任务、即将执行与失败记录 · 调度器每 15 秒检查一次</p></div>
           <div class="acts">
@@ -630,4 +678,3 @@
 <script src="/ui/app.js"></script>
 </body>
 </html>
-
