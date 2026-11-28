@@ -287,6 +287,9 @@ def make_handler(inst: Instance):
                 if p == "/api/multisite/hide":
                     from engine.multisite import hide as multisite_hide
                     return _json(self, multisite_hide())
+                if p == "/api/multisite/fullscreen":
+                    from engine.multisite import fullscreen as multisite_fullscreen
+                    return _json(self, multisite_fullscreen(bool(body.get("on"))))
                 if p == "/api/window":
                     if os.name != "nt":
                         return _json(self, {"ok": False, "message": "仅 Windows 桌面端支持窗口控制"})

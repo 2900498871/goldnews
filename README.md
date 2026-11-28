@@ -9,7 +9,7 @@
 - **新增「多平台中心」**：左侧导航放在「每日新闻」下面，**不挂 B站/贴吧/微博/知乎/抖音子项**；点进模块后点平台卡片即可。
 - **官方页面嵌入程序内容区**：启动时预先建一个隐藏 WebView2 窗口，与主窗口共用同一用户数据目录；点「打开 B站 / 打开 贴吧…」时把它挂进主窗口内容区并加载平台官网。左侧导航和顶栏保留，不产生新的任务栏窗口，也不跳系统浏览器。
 - **直接复用设置页登录**：内嵌官方页面与设置页平台登录使用同一个 WebView2 配置，Cookie 和登录状态直接复用；贴吧没有独立登录，复用设置页的百度登录，不再另建一套登录。
-- **官方站点完整交互**：登录、扫码、搜索、视频、帖子、评论都在官方页面自己完成；顶部「关闭官方页面」回到平台卡片。官方页面里的 `target=_blank` / `window.open` 也留在同一个内嵌窗口，不跳系统浏览器；窗口缩放、最大化和滚动时只按尺寸变化重排，避免内容区闪白。官方站点拒绝 iframe 跨域嵌入，因此这里不是 iframe，而是把同一个 WebView2 会话的原生窗口挂进内容区。
+- **官方站点完整交互**：登录、扫码、搜索、视频、帖子、评论都在官方页面自己完成；顶部「关闭官方页面」回到平台卡片，「应用全屏」让官方页盖住左侧导航铺满窗口内容区，再点「应用还原」恢复侧栏。官方页面里的 `target=_blank` / `window.open` 也留在同一个内嵌窗口，不跳系统浏览器；窗口缩放、最大化和滚动时只按尺寸变化重排，避免内容区闪白。官方站点拒绝 iframe 跨域嵌入，因此这里不是 iframe，而是把同一个 WebView2 会话的原生窗口挂进内容区。
 - **安全边界**：只允许五个硬编码官方 URL，前端不能传任意网址；接口仅本机回环地址可调。
 - **接口**：`GET /api/multisite/sites`、`POST /api/multisite/show {site}`、`POST /api/multisite/hide`；`site` 取值 `bilibili|tieba|weibo|zhihu|douyin`。
 
@@ -325,7 +325,7 @@ dist\日常小助手.exe --stop              :: 让已运行的实例干净退�
 `GET /api/selfcheck`、`GET /api/report?id=`、`POST /api/{holdings,trade,backtest}`、
 `GET /api/history/runs`、`POST /api/history/analyze`（FR-16）、
 `GET /api/daily?kind=news|brief[&path=]`（每日文档状态 / 读文档）、`GET /api/daily/article?key=&url=&title=`（读某条本机正文，缺了现抓）、`GET /api/platforms/status`（五平台登录状态、可用方式和后台任务）、`POST /api/platforms/{login_password,login_sms,login_code,login_qr,login_official,cancel,logout,clear} {platform,...}`（应用内账号密码 / 短信验证码 / 提交验证码 / 扫码 / 官方页面兜底 / 取消 / 退出 / 清记录，仅本机回环地址可调）、`POST /api/daily/{run,digest,open}`、`POST /api/daily/article/open {kind,day}`（打开当天正文 HTML）、`POST /api/autostart {enabled}`、
-`GET /api/multisite/sites`（五平台元数据与内嵌可用性）、`POST /api/multisite/show {site}`（把官方页面挂进主窗口内容区）、`POST /api/multisite/hide`（关闭官方页面）、`POST /api/window`（桌面无边框窗口控制：`info` 返回 `host: webview|edge`、`maximize`、`minimize`、`close`）、`GET /api/gold_history?symbol=domestic|xau&period=1d|1m|3m|6m|1y|5y`、`POST /api/shutdown`（本机退出）。
+`GET /api/multisite/sites`（五平台元数据与内嵌可用性）、`POST /api/multisite/show {site}`（把官方页面挂进主窗口内容区）、`POST /api/multisite/fullscreen {on}`（官方应用全屏 / 还原）、`POST /api/multisite/hide`（关闭官方页面）、`POST /api/window`（桌面无边框窗口控制：`info` 返回 `host: webview|edge`、`maximize`、`minimize`、`close`）、`GET /api/gold_history?symbol=domestic|xau&period=1d|1m|3m|6m|1y|5y`、`POST /api/shutdown`（本机退出）。
 
 ---
 

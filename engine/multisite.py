@@ -78,3 +78,12 @@ def hide() -> dict:
         return hide_site_panel()
     except Exception as e:
         return {"ok": False, "message": "%s: %s" % (type(e).__name__, e)}
+
+
+def fullscreen(on: bool) -> dict:
+    """官方应用全屏 / 还原；只改变内嵌页矩形，不产生新的系统窗口。"""
+    try:
+        from launcher import set_site_fullscreen
+        return set_site_fullscreen(bool(on))
+    except Exception as e:
+        return {"ok": False, "message": "%s: %s" % (type(e).__name__, e)}

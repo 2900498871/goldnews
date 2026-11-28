@@ -446,7 +446,7 @@
     zhihu: { name: '知乎', label: '打开 知乎' },
     douyin: { name: '抖音', label: '打开 抖音' }
   };
-  var MS_BUSY = false, MS_OPEN = false, MS_SITE = '';
+  var MS_BUSY = false, MS_OPEN = false, MS_SITE = '', MS_FULL = false;
   function msButtons(key) {
     return document.querySelectorAll('[data-ms-btn="' + key + '"]');
   }
@@ -460,8 +460,31 @@
   }
   function setMsPanelOpen(open) {
     MS_OPEN = !!open;
-    var btn = $('msCloseBtn');
-    if (btn) btn.style.display = open ? '' : 'none';
+    var close = $('msCloseBtn');
+    var full = $('msFullBtn');
+    if (close) close.style.display = open ? '' : 'none';
+    if (full) {
+      full.style.display = open ? '' : 'none';
+      full.textContent = MS_FULL ? '应用还原' : '应用全屏';
+    }
+  }
+  function toggleMultiSiteFull() {
+    if (!MS_OPEN || MS_BUSY) return;
+    var next = !MS_FULL;
+    MS_BUSY = true;
+    api('/api/multisite/fullscreen', 'POST', { on: next }).then(function (r) {
+      var d = (r && r.data) || {};
+      if (d.ok === false) {
+        toast(d.message || '切换官方应用全屏失败');
+      } else {
+        MS_FULL = next;
+        setMsPanelOpen(true);
+      }
+      MS_BUSY = false;
+    }).catch(function () {
+      toast('切换官方应用全屏失败');
+      MS_BUSY = false;
+    });
   }
   function openMultiSite(key) {
     var meta = MS_META[key];
@@ -474,6 +497,7 @@
         setMsPanelOpen(false);
       } else {
         MS_SITE = key;
+        MS_FULL = false;
         setMsPanelOpen(true);
         toast(d.message || ('已在程序内打开' + meta.name + '官方页面'));
       }
@@ -491,10 +515,12 @@
       if (d.ok === false) toast(d.message || '关闭官方页面失败');
     }).catch(function () {});
     MS_SITE = '';
+    MS_FULL = false;
     setMsPanelOpen(false);
   }
   window.openMultiSite = openMultiSite;
   window.closeMultiSitePanel = closeMultiSitePanel;
+  window.toggleMultiSiteFull = toggleMultiSiteFull;
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && MS_OPEN) closeMultiSitePanel();
   });

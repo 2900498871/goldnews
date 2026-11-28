@@ -339,6 +339,8 @@ _WV_HOST = "edge"      # webview | edge
 _WV_RESTORE = None     # 最大化前的窗口矩形 (l, t, r, b)
 _SITE_WV = None        # 多平台中心内嵌官方页面的隐藏子窗口
 _SITE_OPEN = False
+_SITE_FULL = False     # 官方页面是否铺满内容区（隐藏左侧导航，顶栏保留）
+_SITE_LAST_GEOM = None # 最近一次应用的官方页面矩形，避免重复重排
 _SITE_TITLE = "日常小助手 · 官方页面"
 _WV_ZOOM = False       # 自管的最大化状态
 _WV_ALLOW_CLOSE = False
@@ -413,15 +415,21 @@ def _site_geometry() -> tuple[int, int, int, int] | None:
         pass
     scale = dpi / 96.0
     # 与 style.css 保持一致：顶栏 56px；侧栏常规 206px，窄窗口 170px
-    side = 206 if rc.right / scale >= 1200 else 170
-    x = int(round(side * scale))
     y = int(round(56 * scale))
-    w = max(120, int(rc.right) - x)
+    if _SITE_FULL:
+        # 应用全屏：官方页盖住侧栏，顶栏保留（关闭 / 应用还原按钮仍在）
+        x = 0
+        w = max(120, int(rc.right))
+    else:
+        side = 206 if rc.right / scale >= 1200 else 170
+        x = int(round(side * scale))
+        w = max(120, int(rc.right) - x)
     h = max(120, int(rc.bottom) - y)
     return x, y, w, h
 
 
 def _site_reposition(resize: bool = False) -> None:
+    global _SITE_LAST_GEOM
     main = _wv_hwnd()
     site = _site_hwnd()
     api = _api()
@@ -445,28 +453,24 @@ def _site_reposition(resize: bool = False) -> None:
         pass
     api.u32.SetWindowPos(site, 0, x, y, w, h,
                          api.SWP_NOACTIVATE | api.SWP_SHOWWINDOW)
+    _SITE_LAST_GEOM = geom
 
 
 def _site_watch() -> None:
     """窗口拖动/最大化后，让内嵌官方页面跟住内容区。"""
-    last = None
     while _SITE_WV is not None:
         if _SITE_OPEN:
             site = _site_hwnd()
             main = _wv_hwnd()
             geom = _site_geometry()
             api = _api()
+            last = _SITE_LAST_GEOM
             if site and main and geom and api:
                 # 只在尺寸变化或父子关系丢失时才动窗口；不要每 0.45 秒
                 # 重设一次 SetParent/SetWindowPos，否则滚动时会反复重绘闪屏。
-                if last is None:
-                    last = geom
-                changed = geom != last
+                changed = last is not None and geom != last
                 if changed or api.u32.GetParent(site) != main:
                     _site_reposition(resize=changed)
-                last = geom
-        else:
-            last = None
         time.sleep(0.45)
 
 
@@ -522,7 +526,7 @@ def _site_prepare_clip() -> None:
 
 def show_site_panel(url: str) -> dict:
     """把官方页面嵌进主窗口内容区；不产生任务栏窗口，不另建浏览器配置。"""
-    global _SITE_OPEN
+    global _SITE_OPEN, _SITE_FULL
     if _SITE_WV is None:
         return {"ok": False, "message": "当前版本没有可用的 WebView2，无法内嵌官方页面"}
     main = _wv_hwnd()
@@ -531,6 +535,7 @@ def show_site_panel(url: str) -> dict:
     if not main or not site:
         return {"ok": False, "message": "没有找到官方页面窗口句柄"}
     _SITE_OPEN = True
+    _SITE_FULL = False
     try:
         _site_external_links_in_place(True)
         _site_prepare_clip()
@@ -565,8 +570,10 @@ def show_site_panel(url: str) -> dict:
 
 
 def hide_site_panel() -> dict:
-    global _SITE_OPEN
+    global _SITE_OPEN, _SITE_FULL, _SITE_LAST_GEOM
     _SITE_OPEN = False
+    _SITE_FULL = False
+    _SITE_LAST_GEOM = None
     _site_external_links_in_place(False)
     site = _site_hwnd()
     api = _api()
@@ -578,6 +585,17 @@ def hide_site_panel() -> dict:
         except Exception:
             pass
     return {"ok": True, "message": "已关闭官方页面"}
+
+
+def set_site_fullscreen(on: bool) -> dict:
+    """应用全屏：官方页盖住左侧导航铺满内容区；还原时恢复侧栏留白。"""
+    global _SITE_FULL
+    if _SITE_WV is None or not _SITE_OPEN:
+        return {"ok": False, "message": "官方页面尚未打开"}
+    _SITE_FULL = bool(on)
+    _site_reposition(resize=True)
+    return {"ok": True, "fullscreen": _SITE_FULL,
+            "message": "官方应用已全屏" if _SITE_FULL else "官方应用已还原"}
 
 
 def _wv_maximized() -> bool:
@@ -681,15 +699,28 @@ def _wv_action(action: str) -> dict:
         return _wv_action("hide")
     if action in ("quit", "exit"):
         _wv_allow_close()
-        global _SITE_WV
-        if _SITE_WV is not None:
+        global _SITE_OPEN, _SITE_FULL, _SITE_LAST_GEOM
+        _SITE_OPEN = False
+        _SITE_FULL = False
+        _SITE_LAST_GEOM = None
+        _site_external_links_in_place(False)
+        site = _site_hwnd()
+        main = _wv_hwnd()
+        api = _api()
+        # 这里不能直接调 Window.destroy()：它会从 HTTP 线程 Invoke 到 UI 线程，
+        # 内嵌页还是主窗口子窗口时容易卡死。改为发 WM_CLOSE，让 UI 线程自己关。
+        if site:
             try:
-                _SITE_WV.destroy()
+                api.u32.ShowWindow(site, 0)
+                api.u32.PostMessageW(site, api.WM_CLOSE, 0, 0)
             except Exception:
                 pass
-            _SITE_WV = None
-        _WV.destroy()
-        return {"ok": True}
+        if main:
+            api.u32.PostMessageW(main, api.WM_CLOSE, 0, 0)
+        # 兜底：pywebview 若被隐藏子窗口拖住事件循环，2.5 秒后强制结束进程
+        threading.Thread(target=lambda: (time.sleep(2.5), os._exit(0)),
+                         daemon=True).start()
+        return {"ok": True, "message": "正在退出"}
     # caption / refresh / move 在 WebView2 宿主下由系统原生处理，无需宿主介入
     return {"ok": True, "host": "webview"}
 
