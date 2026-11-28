@@ -54,6 +54,8 @@ class _Win32:
     SW_MAXIMIZE = 3
     SW_RESTORE = 9
     WS_CHILD = 0x40000000
+    WS_CLIPCHILDREN = 0x02000000
+    WS_CLIPSIBLINGS = 0x04000000
     WS_VISIBLE = 0x10000000
     WS_POPUP = 0x80000000
     WS_EX_NOACTIVATE = 0x08000000
@@ -429,18 +431,20 @@ def _site_reposition(resize: bool = False) -> None:
     if not geom:
         return
     x, y, w, h = geom
-    # 先恢复父子关系：WebView2 的 show()/resize() 会把窗口重新变成顶层窗口
+    # 先 resize 再设父子/位置：pywebview 的 resize 会顺手改窗口位置，
+    # 如果先定位后 resize，子窗口会被它带偏。
+    if resize and _SITE_WV is not None:
+        try:
+            _SITE_WV.resize(w, h)
+        except Exception:
+            pass
+    # 恢复父子关系：WebView2 的 show()/resize() 会把窗口重新变成顶层窗口
     try:
         api.u32.SetParent(site, main)
     except Exception:
         pass
     api.u32.SetWindowPos(site, 0, x, y, w, h,
                          api.SWP_NOACTIVATE | api.SWP_SHOWWINDOW)
-    if resize and _SITE_WV is not None:
-        try:
-            _SITE_WV.resize(w, h)
-        except Exception:
-            pass
 
 
 def _site_watch() -> None:
@@ -448,10 +452,18 @@ def _site_watch() -> None:
     last = None
     while _SITE_WV is not None:
         if _SITE_OPEN:
+            site = _site_hwnd()
+            main = _wv_hwnd()
             geom = _site_geometry()
-            if geom:
-                # 每次校正父子关系与位置；尺寸变化时同步通知 WebView2 重绘
-                _site_reposition(resize=(geom != last))
+            api = _api()
+            if site and main and geom and api:
+                # 只在尺寸变化或父子关系丢失时才动窗口；不要每 0.45 秒
+                # 重设一次 SetParent/SetWindowPos，否则滚动时会反复重绘闪屏。
+                if last is None:
+                    last = geom
+                changed = geom != last
+                if changed or api.u32.GetParent(site) != main:
+                    _site_reposition(resize=changed)
                 last = geom
         else:
             last = None
@@ -464,8 +476,48 @@ def _site_style_child(hwnd: int) -> None:
         return
     style = api.u32.GetWindowLongW(hwnd, api.GWL_STYLE)
     style = (style & ~(api.WS_POPUP | api.WS_CAPTION | 0x00040000 |
-                       api.WS_SYSMENU | api.WS_MINIMIZEBOX | api.WS_MAXIMIZEBOX)) | api.WS_CHILD
+                       api.WS_SYSMENU | api.WS_MINIMIZEBOX | api.WS_MAXIMIZEBOX)) | \
+        api.WS_CHILD | api.WS_CLIPSIBLINGS
     api.u32.SetWindowLongW(hwnd, api.GWL_STYLE, style)
+
+
+def _site_external_links_in_place(on: bool) -> None:
+    """内嵌官方页面打开期间，target=_blank/window.open 留在本窗口。
+    关闭后恢复主界面的外链行为，避免主界面文档链接顶掉整个应用。"""
+    try:
+        import webview
+        webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER'] = not on
+    except Exception:
+        pass
+
+
+def _site_prepare_clip() -> None:
+    """让主窗口和它的 WebView2 子窗口不要互相覆盖绘制，避免滚动时闪白。"""
+    main = _wv_hwnd()
+    api = _api()
+    if not main or not api:
+        return
+    try:
+        style = api.u32.GetWindowLongW(main, api.GWL_STYLE)
+        if not (style & api.WS_CLIPCHILDREN):
+            api.u32.SetWindowLongW(main, api.GWL_STYLE, style | api.WS_CLIPCHILDREN)
+            api.u32.SetWindowPos(main, 0, 0, 0, 0, 0,
+                                 api.SWP_NOMOVE | api.SWP_NOSIZE | api.SWP_NOZORDER |
+                                 api.SWP_NOACTIVATE | api.SWP_FRAMECHANGED)
+
+        @api.WNDENUMPROC
+        def _cb(child, _l):
+            try:
+                st = api.u32.GetWindowLongW(child, api.GWL_STYLE)
+                if not (st & api.WS_CLIPSIBLINGS):
+                    api.u32.SetWindowLongW(child, api.GWL_STYLE, st | api.WS_CLIPSIBLINGS)
+            except Exception:
+                pass
+            return True
+
+        api.u32.EnumChildWindows(main, _cb, 0)
+    except Exception:
+        pass
 
 
 def show_site_panel(url: str) -> dict:
@@ -480,6 +532,8 @@ def show_site_panel(url: str) -> dict:
         return {"ok": False, "message": "没有找到官方页面窗口句柄"}
     _SITE_OPEN = True
     try:
+        _site_external_links_in_place(True)
+        _site_prepare_clip()
         # 先把窗口挪到屏幕外再 show：show() 会把 WebView2 重置成顶层窗口，
         # 必须在 show() 之后再 SetParent，否则官方页面会浮在程序外面。
         if api:
@@ -502,6 +556,7 @@ def show_site_panel(url: str) -> dict:
         _SITE_WV.load_url(url)
     except Exception as e:
         _SITE_OPEN = False
+        _site_external_links_in_place(False)
         return {"ok": False, "message": "%s: %s" % (type(e).__name__, e)}
     if api:
         api.u32.ShowWindow(site, 5)          # SW_SHOW
@@ -512,6 +567,7 @@ def show_site_panel(url: str) -> dict:
 def hide_site_panel() -> dict:
     global _SITE_OPEN
     _SITE_OPEN = False
+    _site_external_links_in_place(False)
     site = _site_hwnd()
     api = _api()
     if site and api:
