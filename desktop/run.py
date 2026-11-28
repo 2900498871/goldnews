@@ -34,16 +34,8 @@ def main():
     ap.add_argument("--no-window", action="store_true")
     ap.add_argument("--selfcheck", action="store_true")
     ap.add_argument("--fetch", choices=["prices", "news", "flash", "daily", "full"])
-    ap.add_argument("--site", choices=["bilibili", "tieba", "weibo", "zhihu", "douyin"],
-                    help="打开多平台中心的官方页面窗口（由主程序拉起）")
     ap.add_argument("--send-mail", action="store_true")
     a = ap.parse_args()
-
-    if a.site:
-        from engine.multisite import show_official_window
-        show_official_window(a.site, os.path.join(ROOT, "desktop", "data"),
-                             os.path.join(ROOT, "desktop", "GoldDesk.ico"))
-        return
 
     # 同一端口只允许一个实例；后台无窗口实例不占 GUI 锁，GUI 可复用已有服务
     if not (a.selfcheck or a.fetch):

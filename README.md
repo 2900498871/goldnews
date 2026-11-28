@@ -6,11 +6,12 @@
 
 **2026-11-28 第十二轮（多平台中心）**
 
-- **新增「多平台中心」**：左侧导航放在「每日新闻」下面，主模块下挂 B站、贴吧、微博、知乎、抖音五个子模块；顶部页面与左侧子项都能打开。
-- **官方页面直接在本程序打开**：每个子模块用本程序自己的 WebView2 窗口加载平台官网（不跳系统浏览器、不嵌 iframe、不注入脚本、不抓页面），登录/扫码/短信验证码/浏览都由官方页面完成，降低平台风控触发概率。
-- **登录态保留**：每个平台使用独立的持久化浏览器目录（`data\multisite\<平台>`），关闭窗口后 Cookie 仍保留；多平台中心的登录态与设置页的应用内登录面板互相独立。同一平台已经打开时提示切换已有窗口，不重复创建。
-- **安全边界**：只允许五个硬编码官方 URL，前端不能传任意网址；接口仅本机回环地址可调，退出程序时一并销毁多平台窗口。
-- **接口**：`GET /api/multisite/sites`、`POST /api/multisite/open {site}`；`site` 取值 `bilibili|tieba|weibo|zhihu|douyin`。
+- **新增「多平台中心」**：左侧导航放在「每日新闻」下面，**不再挂 B站/贴吧/微博/知乎/抖音子项**；点进模块后点平台卡片即可。
+- **不开新窗口、不跳系统浏览器**：点「打开 B站 / 打开 贴吧…」不再启动独立网页窗口，而是在当前页面加载该平台热榜；点热榜条目在当前页面的阅读弹窗里看正文。
+- **直接复用设置页登录**：正文读取用「设置 → 平台登录」里已保存的 Cookie 和登录状态，不在多平台中心重新登录；贴吧没有独立登录，复用设置页的百度登录。设置页未登录时只显示公开热榜，并提示去设置页登录。
+- **官方页面不能嵌 iframe**：平台会拒绝跨域嵌入，所以本页以“热榜 + 正文阅读”呈现，不伪装成完整官方网页；需要播放视频、发帖、评论等完整交互时，仍需平台自己的客户端或浏览器。
+- **安全边界**：只允许五个硬编码平台域名，前端不能传任意网址；接口仅本机回环地址可调。
+- **接口**：`GET /api/multisite/sites`、`POST /api/multisite/feed {site}`、`POST /api/multisite/read {site,url,title}`；`site` 取值 `bilibili|tieba|weibo|zhihu|douyin`。
 
 **2026-11-28 第十一轮（平台登录 / 退出 / 热搜正文）**
 
@@ -184,7 +185,7 @@ v2/
 │   ├── scheduler.py             自定义时点、静默、限流、事件告警、配置热重载、每日文档/汇总时点
 │   ├── daily.py                 每日内容（新闻 + 热搜 / 资讯 / 军事）采集、AI 归纳、三份文档、合并邮件与周期汇总
 │   ├── platforms.py             五平台登录/退出窗口、Cookie 登录态检测、WebView2 渲染抓正文
-│   ├── multisite.py             多平台中心：在程序内窗口打开 B站/贴吧/微博/知乎/抖音官方页面
+│   ├── multisite.py             多平台中心：应用内热榜 + 复用设置页登录读正文（B站/贴吧/微博/知乎/抖音）
 │   ├── autostart.py             开机自启动（当前用户注册表 Run 项读写）
 │   ├── goldhist.py              国内 / 国际金价历史（今日分时与 5 年日 K）
 │   ├── pipeline.py              定时/手动同源编排 + 全链路降级
@@ -324,7 +325,7 @@ dist\日常小助手.exe --stop              :: 让已运行的实例干净退�
 `GET /api/selfcheck`、`GET /api/report?id=`、`POST /api/{holdings,trade,backtest}`、
 `GET /api/history/runs`、`POST /api/history/analyze`（FR-16）、
 `GET /api/daily?kind=news|brief[&path=]`（每日文档状态 / 读文档）、`GET /api/daily/article?key=&url=&title=`（读某条本机正文，缺了现抓）、`GET /api/platforms/status`（五平台登录状态、可用方式和后台任务）、`POST /api/platforms/{login_password,login_sms,login_code,login_qr,login_official,cancel,logout,clear} {platform,...}`（应用内账号密码 / 短信验证码 / 提交验证码 / 扫码 / 官方页面兜底 / 取消 / 退出 / 清记录，仅本机回环地址可调）、`POST /api/daily/{run,digest,open}`、`POST /api/daily/article/open {kind,day}`（打开当天正文 HTML）、`POST /api/autostart {enabled}`、
-`POST /api/window`（桌面无边框窗口控制：`info` 返回 `host: webview|edge`、`maximize`、`minimize`、`close`）、`GET /api/gold_history?symbol=domestic|xau&period=1d|1m|3m|6m|1y|5y`、`POST /api/shutdown`（本机退出）。
+`GET /api/multisite/sites`（五平台元数据与正文可用性）、`POST /api/multisite/feed {site}`（应用内热榜）、`POST /api/multisite/read {site,url,title}`（复用设置页登录读取正文，仅允许各平台官方域名）、`POST /api/window`（桌面无边框窗口控制：`info` 返回 `host: webview|edge`、`maximize`、`minimize`、`close`）、`GET /api/gold_history?symbol=domestic|xau&period=1d|1m|3m|6m|1y|5y`、`POST /api/shutdown`（本机退出）。
 
 ---
 

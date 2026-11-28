@@ -146,8 +146,6 @@ def main():
     ap.add_argument("--stop", action="store_true", help="让已运行的本端实例退出")
     ap.add_argument("--selfcheck", action="store_true", help="一键自检后退出（有输出窗口时可见）")
     ap.add_argument("--fetch", choices=["prices", "news", "flash", "daily", "full"])
-    ap.add_argument("--site", choices=["bilibili", "tieba", "weibo", "zhihu", "douyin"],
-                    help="打开多平台中心的官方页面窗口（由主程序拉起）")
     ap.add_argument("--send-mail", action="store_true")
     a = ap.parse_args()
 
@@ -156,11 +154,6 @@ def main():
             print(json.dumps(post_shutdown(a.port), ensure_ascii=False))
         except Exception as e:
             print("没有可退出的实例：%s" % e)
-        return
-
-    if a.site:
-        from engine.multisite import show_official_window
-        show_official_window(a.site, data_dir, icon_path)
         return
 
     url = "http://%s:%d/" % ("127.0.0.1" if a.host in ("0.0.0.0", "::") else a.host, a.port)

@@ -562,13 +562,8 @@ def _wv_heal() -> bool:
 
 
 def open_webview_window(url: str, title: str, width: int = 1440, height: int = 900,
-                        icon_path: str | None = None, data_dir: str | None = None,
-                        frameless: bool = True, site_mode: bool = False):
-    """在主线程创建 WebView2 窗口并阻塞运行，窗口关闭后返回。
-
-    frameless=False 用于多平台中心的官方页面窗口：保留系统标题栏和关闭按钮；
-    site_mode=True 表示这是独立窗口进程，不挂主窗口的“关闭到托盘”事件。
-    """
+                        icon_path: str | None = None, data_dir: str | None = None):
+    """在主线程创建 WebView2 无边框窗口并阻塞运行，窗口关闭后返回。"""
     global _WV, _WV_HOST, _WV_ALLOW_CLOSE, _TRAY_HINTED
     _WV_ALLOW_CLOSE = False
     _TRAY_HINTED = False
@@ -588,25 +583,21 @@ def open_webview_window(url: str, title: str, width: int = 1440, height: int = 9
         except Exception:
             pass
     kw = {}
-    if not site_mode:
-        try:
-            import inspect
-            if "js_api" in inspect.signature(webview.create_window).parameters:
-                kw["js_api"] = _WV_DRAG
-        except Exception:
-            pass
+    try:
+        import inspect
+        if "js_api" in inspect.signature(webview.create_window).parameters:
+            kw["js_api"] = _WV_DRAG
+    except Exception:
+        pass
     _WV = webview.create_window(
-        title, url, width=(width + fw if frameless else width),
-        height=(height + fh if frameless else height),
-        frameless=frameless, easy_drag=(not frameless),
+        title, url, width=width + fw, height=height + fh, frameless=True, easy_drag=False,
         shadow=True, text_select=True, zoomable=False, background_color="#FFFFFF", **kw)
     _WV_HOST = "webview"
-    if not site_mode:
-        try:
-            _WV.events.closing += _wv_closing
-        except Exception:
-            pass
-    print("已打开 WebView2 窗口（%s）：%s" % ("官方页面" if site_mode else "主窗口", url), flush=True)
+    try:
+        _WV.events.closing += _wv_closing
+    except Exception:
+        pass
+    print("已打开 WebView2 无边框窗口：%s" % url, flush=True)
     webview.start(debug=False, private_mode=False, storage_path=storage, icon=icon_path)
     _WV = None
     _WV_HOST = "edge"
@@ -616,20 +607,17 @@ def open_webview_window(url: str, title: str, width: int = 1440, height: int = 9
 
 def open_desktop_window(url: str, title: str, width: int = 1440, height: int = 900,
                         icon_path: str | None = None, data_dir: str | None = None,
-                        profile_dir: str | None = None, frameless: bool = True,
-                        site_mode: bool = False):
-    """优先用 WebView2 宿主；不可用时回退到 Edge --app。必须在主线程调用。"""
+                        profile_dir: str | None = None):
+    """优先用 WebView2 无边框宿主；不可用时回退到 Edge --app。必须在主线程调用。"""
     if webview_available():
         try:
-            open_webview_window(url, title, width, height, icon_path, data_dir,
-                                frameless=frameless, site_mode=site_mode)
-            return "WebView2 窗口"
+            open_webview_window(url, title, width, height, icon_path, data_dir)
+            return "WebView2 无边框窗口"
         except Exception as e:
             print("WebView2 宿主启动失败，回退 Edge --app：%s: %s" % (type(e).__name__, e), flush=True)
             global _WV, _WV_HOST
             _WV, _WV_HOST = None, "edge"
-    return open_app_window(url, width, height, frameless=frameless,
-                           icon_path=icon_path, profile_dir=profile_dir)
+    return open_app_window(url, width, height, icon_path=icon_path, profile_dir=profile_dir)
 
 
 def find_browser() -> str | None:
@@ -843,8 +831,7 @@ def _apply_later(icon_path, relaunch_args=None, profile_dir=None):
 
 def open_app_window(url: str, width: int = 1440, height: int = 900,
                     frameless: bool = True, icon_path: str | None = None,
-                    extra_args: list | None = None, profile_dir: str | None = None,
-                    return_proc: bool = False):
+                    extra_args: list | None = None, profile_dir: str | None = None):
     exe = find_browser()
     if not exe:
         webbrowser.open(url)
@@ -869,9 +856,7 @@ def open_app_window(url: str, width: int = 1440, height: int = 900,
     if extra_args:
         args += list(extra_args)
     try:
-        p = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if return_proc:
-            return p
+        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if frameless and os.name == "nt":
             threading.Thread(target=_apply_later, args=(icon_path, args, profile_dir),
                              daemon=True).start()
