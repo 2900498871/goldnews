@@ -248,7 +248,9 @@ def make_handler(inst: Instance):
                                        origin.startswith("http://localhost:")):
                         return _json(self, {"ok": False, "message": "来源不被允许"}, 403)
                 if p.startswith("/api/platforms/"):
-                    from engine.platforms import start_logout, clear_local, start_password_login
+                    from engine.platforms import (start_logout, clear_local, start_password_login,
+                                                  start_sms_login, submit_login_code,
+                                                  start_qr_login, start_login, cancel_login)
                     platform = str(body.get("platform") or "").strip()
                     if not platform:
                         return _json(self, {"ok": False, "message": "缺少平台参数"}, 400)
@@ -256,6 +258,16 @@ def make_handler(inst: Instance):
                         r = start_password_login(inst.data_dir, platform,
                                                  str(body.get("username") or ""),
                                                  str(body.get("password") or ""))
+                    elif p == "/api/platforms/login_sms":
+                        r = start_sms_login(inst.data_dir, platform, str(body.get("phone") or ""))
+                    elif p == "/api/platforms/login_code":
+                        r = submit_login_code(inst.data_dir, platform, str(body.get("code") or ""))
+                    elif p == "/api/platforms/login_qr":
+                        r = start_qr_login(inst.data_dir, platform)
+                    elif p == "/api/platforms/login_official":
+                        r = start_login(inst.data_dir, platform)
+                    elif p == "/api/platforms/cancel":
+                        r = cancel_login(inst.data_dir, platform)
                     elif p == "/api/platforms/logout":
                         r = start_logout(inst.data_dir, platform)
                     elif p == "/api/platforms/clear":

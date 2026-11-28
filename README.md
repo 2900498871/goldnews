@@ -6,7 +6,10 @@
 
 **2026-11-28 第十一轮（平台登录 / 退出 / 热搜正文）**
 
-- **五个平台登录**：设置页「平台登录」卡片打开**程序自己的登录面板**，不再直接弹出微博 / 百度 / 抖音 / B站 / 知乎的网页登录页。面板按应用风格做了平台页签、账号/手机号、密码和状态提示；账号密码只用于本次登录，后台在隐藏 WebView2 里填入平台表单，**不保存账号密码，也不把 Cookie 明文写进状态文件**。平台若要求验证码/短信确认或页面改版，会直接提示“登录未完成”，不会假装成功。
+- **五个平台登录**：设置页「平台登录」卡片打开**程序自己的登录面板**，不再直接弹出微博 / 百度 / 抖音 / B站 / 知乎的网页登录页。面板按应用风格做了平台页签、登录方式（账号密码 / 手机验证码 / 扫码）和状态提示；账号密码只用于本次登录，后台在隐藏 WebView2 里填入平台表单，**不保存账号密码，也不把 Cookie 明文写进状态文件**。平台若要求图形验证码、风控确认或页面改版，会直接提示“登录未完成”，不会假装成功。
+- **短信验证码通道**：微博、抖音、知乎支持在应用内填手机号、点“发送验证码”，短信到达后在同一个面板填验证码并提交；验证码只在后台任务内存里停留，不写配置文件。
+- **扫码通道**：微博、百度、B站、抖音支持把平台二维码取到应用面板里显示，用对应 App 扫码后后台自动检测登录；抖音默认打开扫码方式并自动生成二维码。知乎二维码是跨域 canvas，当前无法安全取出，面板会提供“改用官方页面登录”按钮回退到平台官方扫码页。二维码过期或平台拒绝时，可以点“生成 / 刷新二维码”重试。
+- **官方页面兜底**：如果应用内账号密码 / 短信 / 扫码都被平台风控拦住，面板底部「改用官方页面登录」会打开该平台官方登录页（用户可见的兜底，不是默认路径）。
 - **登录后读热搜正文**：热搜条目点标题时，后端先用同一个 WebView2 用户目录加载页面（页面里已带登录 Cookie），再按平台选择器抽取正文：微博取热门微博正文，知乎取问答正文，B站取视频标题/简介，抖音取视频文案/简介，百度取搜索结果摘要。正文落到 `article_cache` 与当天 `YYYY-MM-DD.正文.html`，仍可「打开本地正文文件」。
 - **需要登录会明确提示**：未登录点平台热搜时，正文弹窗显示“需要先登录X，登录后再点一次标题即可读取”，并提供「登录X后查看」按钮；应用内登录面板登录成功后，再点一次标题即可重新抓取。旧版本把这类链接标成“抓不到正文”的缓存会自动重试，不再卡住。
 - **退出账号是真退出**：设置页每个已登录平台都有「退出账号」，打开该平台官方退出页；微博/百度/B站会直接清登录 Cookie，抖音/知乎需在页面右上角头像菜单点退出，检测到登录 Cookie 消失后自动关闭窗口并把本机状态改为未登录。另有「清除记录」只清本机状态，不修改平台账号。
@@ -311,7 +314,7 @@ dist\日常小助手.exe --stop              :: 让已运行的实例干净退�
 `POST /api/fetch`、`POST /api/schedule`、`POST /api/master`、`POST /api/test/{smtp,deepseek,mail}`、
 `GET /api/selfcheck`、`GET /api/report?id=`、`POST /api/{holdings,trade,backtest}`、
 `GET /api/history/runs`、`POST /api/history/analyze`（FR-16）、
-`GET /api/daily?kind=news|brief[&path=]`（每日文档状态 / 读文档）、`GET /api/daily/article?key=&url=&title=`（读某条本机正文，缺了现抓）、`GET /api/platforms/status`（五平台登录状态与后台任务）、`POST /api/platforms/{login_password,logout,clear} {platform,...}`（应用内账号密码登录 / 打开平台退出页 / 只清本机状态，仅本机回环地址可调）、`POST /api/daily/{run,digest,open}`、`POST /api/daily/article/open {kind,day}`（打开当天正文 HTML）、`POST /api/autostart {enabled}`、
+`GET /api/daily?kind=news|brief[&path=]`（每日文档状态 / 读文档）、`GET /api/daily/article?key=&url=&title=`（读某条本机正文，缺了现抓）、`GET /api/platforms/status`（五平台登录状态、可用方式和后台任务）、`POST /api/platforms/{login_password,login_sms,login_code,login_qr,login_official,cancel,logout,clear} {platform,...}`（应用内账号密码 / 短信验证码 / 提交验证码 / 扫码 / 官方页面兜底 / 取消 / 退出 / 清记录，仅本机回环地址可调）、`POST /api/daily/{run,digest,open}`、`POST /api/daily/article/open {kind,day}`（打开当天正文 HTML）、`POST /api/autostart {enabled}`、
 `POST /api/window`（桌面无边框窗口控制：`info` 返回 `host: webview|edge`、`maximize`、`minimize`、`close`）、`GET /api/gold_history?symbol=domestic|xau&period=1d|1m|3m|6m|1y|5y`、`POST /api/shutdown`（本机退出）。
 
 ---

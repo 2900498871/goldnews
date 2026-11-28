@@ -191,7 +191,7 @@ _FILL_JS = r"""
 
 _PASSWORD_RULES = {
     "weibo": {
-        "user": ["input[placeholder*='手机号']", "input[placeholder*='账号']", "input[type='text']"],
+        "user": ["input[placeholder*='手机号或邮箱']", "input[placeholder*='手机号']", "input[placeholder*='账号']", "input[type='text']"],
         "pass": ["input[type='password']"],
         "submit": ["button"],
     },
@@ -216,6 +216,202 @@ _PASSWORD_RULES = {
         "submit": ["button.SignFlow-submitButton", "button"],
     },
 }
+
+# 应用内登录方式：密码 / 手机验证码 / 扫码；具体能力按平台实际页面提供。
+LOGIN_METHODS = {
+    "weibo": {"password": True, "sms": True, "qr": True},
+    "baidu": {"password": True, "sms": False, "qr": True},
+    "douyin": {"password": False, "sms": True, "qr": True},
+    "bilibili": {"password": True, "sms": False, "qr": True},
+    "zhihu": {"password": True, "sms": True, "qr": False},
+}
+
+_SMS_RULES = {
+    "weibo": {
+        "phone": ["input[placeholder*='手机号']", "input[type='tel']"],
+        "code": ["input[placeholder*='验证码']"],
+        "send": ["获取验证码"],
+        "submit": ["button"],
+    },
+    "zhihu": {
+        "phone": ["input[name='username']", "input[placeholder*='手机号']"],
+        "code": ["input[name='digits']", "input[placeholder*='验证码']"],
+        "send": ["获取短信验证码", "获取验证码"],
+        "submit": ["button.SignFlow-submitButton", "button"],
+    },
+    "douyin": {
+        "phone": ["input[name='normal-input']", "input[placeholder*='手机号']"],
+        "code": ["input[name='button-input']", "input[placeholder*='验证码']"],
+        "send": ["获取验证码"],
+        "submit": ["button"],
+    },
+}
+
+_PHONE_JS = r"""
+(function(payload){
+  function vis(e){
+    if(!e) return false;
+    var r=e.getBoundingClientRect(), c=getComputedStyle(e);
+    return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'&&!e.disabled;
+  }
+  function setv(el,val){
+    var proto=(el.tagName==='TEXTAREA'?HTMLTextAreaElement:HTMLInputElement).prototype;
+    var desc=Object.getOwnPropertyDescriptor(proto,'value');
+    try{desc.set.call(el,val)}catch(e){el.value=val}
+    el.dispatchEvent(new Event('input',{bubbles:true}));
+    el.dispatchEvent(new Event('change',{bubbles:true}));
+    el.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'a'}));
+  }
+  function first(sel){
+    for(var i=0;i<sel.length;i++){
+      var nodes=[]; try{nodes=document.querySelectorAll(sel[i])}catch(e){continue}
+      for(var j=0;j<nodes.length;j++) if(vis(nodes[j])) return nodes[j];
+    }
+    return null;
+  }
+  function clickText(texts){
+    var all=document.querySelectorAll('button,a,div,span');
+    var best=null;
+    for(var i=0;i<all.length;i++){
+      var t=(all[i].innerText||all[i].textContent||'').replace(/\s+/g,' ').trim();
+      if(!vis(all[i])) continue;
+      for(var k=0;k<texts.length;k++){
+        if(t===texts[k]){
+          var r=all[i].getBoundingClientRect();
+          if(!best||r.width*r.height<best.a) best={e:all[i],a:r.width*r.height};
+        }
+      }
+    }
+    if(best){best.e.click();return true}
+    return false;
+  }
+  var p=first(payload.phone||[]);
+  if(!p) return {ok:false,reason:'没有找到手机号输入框'};
+  setv(p,payload.phone_number);
+  if(!clickText(payload.send||[])) return {ok:false,reason:'没有找到获取验证码按钮'};
+  return {ok:true};
+})(__PAYLOAD__)
+"""
+
+_CODE_JS = r"""
+(function(payload){
+  function vis(e){
+    if(!e) return false;
+    var r=e.getBoundingClientRect(), c=getComputedStyle(e);
+    return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'&&!e.disabled;
+  }
+  function first(sel){
+    for(var i=0;i<sel.length;i++){
+      var nodes=[]; try{nodes=document.querySelectorAll(sel[i])}catch(e){continue}
+      for(var j=0;j<nodes.length;j++) if(vis(nodes[j])) return nodes[j];
+    }
+    return null;
+  }
+  function setv(el,val){
+    var proto=(el.tagName==='TEXTAREA'?HTMLTextAreaElement:HTMLInputElement).prototype;
+    var desc=Object.getOwnPropertyDescriptor(proto,'value');
+    try{desc.set.call(el,val)}catch(e){el.value=val}
+    el.dispatchEvent(new Event('input',{bubbles:true}));
+    el.dispatchEvent(new Event('change',{bubbles:true}));
+    el.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'a'}));
+  }
+  function clickText(texts){
+    var all=document.querySelectorAll('button,a,div,span');
+    var best=null;
+    for(var i=0;i<all.length;i++){
+      var t=(all[i].innerText||all[i].textContent||'').replace(/\s+/g,' ').trim();
+      if(!vis(all[i])) continue;
+      for(var k=0;k<texts.length;k++){
+        if(t===texts[k]){
+          var r=all[i].getBoundingClientRect();
+          if(!best||r.width*r.height<best.a) best={e:all[i],a:r.width*r.height};
+        }
+      }
+    }
+    if(best){best.e.click();return true}
+    return false;
+  }
+  var c=first(payload.code||[]);
+  if(!c) return {ok:false,reason:'没有找到短信验证码输入框'};
+  setv(c,payload.code_value);
+  if(clickText(payload.submit_text||['登录','登录/注册'])) return {ok:true};
+  var btns=document.querySelectorAll('button');
+  for(var i=0;i<btns.length;i++){
+    if(vis(btns[i]) && /登录|登 录/.test((btns[i].innerText||'').replace(/\s+/g,' ').trim())){btns[i].click();return {ok:true}}
+  }
+  return {ok:false,reason:'没有找到登录按钮'};
+})(__PAYLOAD__)
+"""
+
+_QR_EXTRACT_JS = r"""
+(function(){
+  function vis(e){
+    var r=e.getBoundingClientRect(), c=getComputedStyle(e);
+    return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden';
+  }
+  var best=null;
+  document.querySelectorAll('img').forEach(function(i){
+    if(!vis(i)) return;
+    var r=i.getBoundingClientRect(), src=(i.src||'');
+    if(!src || r.width<90 || r.height<90 || r.width>320 || r.height>320) return;
+    if(Math.abs(r.width-r.height)>12) return;
+    var score=0;
+    if(/^data:image\//i.test(src)) score+=3;
+    if(/qrcode|qr|scan|login/i.test(src)) score+=3;
+    if(/扫码|二维码|scan/i.test(i.alt||'')) score+=2;
+    if(!best || score>best.score) best={src:src,score:score,w:r.width,h:r.height};
+  });
+  if(best) return {ok:true,data:best.src,w:best.w,h:best.h};
+  var cvs=document.querySelectorAll('canvas');
+  for(var i=0;i<cvs.length;i++){
+    var c=cvs[i]; if(!vis(c)) continue;
+    var r=c.getBoundingClientRect();
+    if(r.width<90||r.height<90||Math.abs(r.width-r.height)>12) continue;
+    try{
+      var d=c.toDataURL('image/png');
+      if(d && d.length>60) return {ok:true,data:d,w:r.width,h:r.height};
+    }catch(e){}
+  }
+  return {ok:false,reason:'没有找到二维码图片'};
+})()
+"""
+
+_QR_PREPARE_JS = {
+    "douyin": r"""
+(function(){
+  function vis(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'}
+  var best=null;
+  document.querySelectorAll('*').forEach(function(e){
+    var t=(e.innerText||e.textContent||'').replace(/\s+/g,' ').trim();
+    if(t!=='登录'||!vis(e)) return;
+    var r=e.getBoundingClientRect();
+    if(!best||r.width*r.height<best.a) best={e:e,a:r.width*r.height};
+  });
+  if(best){
+    var r=best.e.getBoundingClientRect();
+    ['pointerdown','mousedown','mouseup','click'].forEach(function(k){
+      var ev=k==='pointerdown'?new PointerEvent(k,{bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2}):new MouseEvent(k,{bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2});
+      best.e.dispatchEvent(ev);
+    });
+    return 'open';
+  }
+  return 'no';
+})()
+"""
+}
+
+_QR_TAB_JS = r"""
+(function(){
+  function vis(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);return !!(r.width&&r.height)&&c.display!=='none'&&c.visibility!=='hidden'}
+  var all=document.querySelectorAll('button,a,div,span');
+  for(var i=0;i<all.length;i++){
+    var t=(all[i].innerText||all[i].textContent||'').replace(/\s+/g,' ').trim();
+    if(t==='扫码登录'&&vis(all[i])){all[i].click();return 'qr'}
+  }
+  return 'no';
+})()
+"""
+
 
 _JS_EXTRACT = r"""
 (function(){
@@ -287,6 +483,10 @@ def _platform_row(data_dir: str, key: str) -> dict:
     saved = (_load(data_dir).get("platforms") or {}).get(key) or {}
     active = _WINDOWS.get(key)
     job = _JOBS.get(key) or {}
+    public_job = {}
+    for k in ("state", "message", "kind", "qr"):
+        if job.get(k):
+            public_job[k] = job.get(k)
     return {
         "key": key,
         "name": conf["name"],
@@ -296,7 +496,8 @@ def _platform_row(data_dir: str, key: str) -> dict:
         "last_check": saved.get("last_check") or "",
         "active": bool(active),
         "mode": (active or {}).get("mode") or "",
-        "job": {"state": job.get("state") or "", "message": job.get("message") or ""},
+        "methods": LOGIN_METHODS.get(key, {}),
+        "job": public_job,
     }
 
 
@@ -455,9 +656,14 @@ def start_logout(data_dir: str, platform: str) -> dict:
         return {"ok": False, "message": "打开退出窗口失败：%s" % _LAST_ERROR}
 
 
-def _set_job(platform: str, state: str, message: str) -> None:
+def _set_job(platform: str, state: str, message: str, kind: str = "", qr: str = "") -> None:
     with _LOCK:
-        _JOBS[platform] = {"state": state, "message": message, "started": iso_bj()}
+        job = {"state": state, "message": message, "started": iso_bj()}
+        if kind:
+            job["kind"] = kind
+        if qr:
+            job["qr"] = qr
+        _JOBS[platform] = job
 
 
 def _password_worker(platform: str, data_dir: str, window, username: str, password: str) -> None:
@@ -539,18 +745,294 @@ def _password_worker(platform: str, data_dir: str, window, username: str, passwo
             pass
 
 
+def _prepare_hidden_login(window, platform: str, settle: float = 2.3) -> str:
+    """等窗口就绪、隐藏、加载登录页；成功返回空字符串，失败返回原因。"""
+    if not window.events.shown.wait(12):
+        return "登录窗口没有就绪"
+    try:
+        window.hide()
+    except Exception:
+        pass
+    window.events.loaded.clear()
+    window.load_url(PLATFORMS[platform]["login_url"])
+    if not window.events.loaded.wait(22):
+        return "平台登录页加载超时"
+    time.sleep(settle)
+    return ""
+
+
+def _logged_now(window, platform: str) -> bool:
+    try:
+        return _logged(window.get_cookies(), platform)
+    except Exception:
+        return False
+
+
+def _sms_worker(platform: str, data_dir: str, window, phone: str) -> None:
+    """手机验证码登录：后台填手机号并触发发送，等待前端提交短信验证码。"""
+    try:
+        reason = _prepare_hidden_login(window, platform)
+        if reason:
+            _set_job(platform, "fail", reason, kind="sms")
+            return
+        if _logged_now(window, platform):
+            _set_job(platform, "ok", "当前已是登录状态，无需再次登录")
+            return
+        if platform == "douyin":
+            # 抖音登录是首页弹层：点击登录按钮后再等弹层出现
+            for _ in range(10):
+                try:
+                    window.evaluate_js(_QR_PREPARE_JS["douyin"])
+                except Exception:
+                    pass
+                time.sleep(1.4)
+        payload = {
+            "phone": _SMS_RULES[platform]["phone"],
+            "send": _SMS_RULES[platform]["send"],
+            "phone_number": phone,
+        }
+        sent = None
+        for _ in range(12):
+            try:
+                sent = window.evaluate_js(_PHONE_JS.replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False)))
+            except Exception as e:
+                sent = {"ok": False, "reason": "填写手机号失败：%s" % type(e).__name__}
+            if isinstance(sent, dict) and sent.get("ok"):
+                break
+            time.sleep(1.2)
+        if not isinstance(sent, dict) or not sent.get("ok"):
+            _set_job(platform, "fail", (sent or {}).get("reason") or "没有找到手机号登录表单", kind="sms")
+            return
+        _set_job(platform, "need_code", "验证码已发送，请输入手机收到的短信验证码", kind="sms")
+        deadline = time.time() + 120
+        code = ""
+        while time.time() < deadline:
+            try:
+                if window.events.closed.is_set():
+                    return
+            except Exception:
+                pass
+            with _LOCK:
+                job = _JOBS.get(platform) or {}
+                code = str(job.pop("code", "") or "")
+            if code:
+                break
+            time.sleep(0.4)
+        if not code:
+            _set_job(platform, "fail", "验证码登录超时，请重新获取验证码", kind="sms")
+            return
+        _set_job(platform, "running", "正在提交短信验证码…", kind="sms")
+        code_payload = {
+            "code": _SMS_RULES[platform]["code"],
+            "submit_text": ["登录/注册", "登录", "确定"],
+            "code_value": code,
+        }
+        try:
+            res = window.evaluate_js(_CODE_JS.replace("__PAYLOAD__", json.dumps(code_payload, ensure_ascii=False)))
+        except Exception as e:
+            _set_job(platform, "fail", "提交验证码失败：%s" % type(e).__name__, kind="sms")
+            return
+        if not isinstance(res, dict) or not res.get("ok"):
+            _set_job(platform, "fail", (res or {}).get("reason") or "没有找到验证码输入框", kind="sms")
+            return
+        deadline = time.time() + 32
+        while time.time() < deadline:
+            if _logged_now(window, platform):
+                _apply_cookies(data_dir, platform, window, "sms")
+                _set_job(platform, "ok", "登录成功")
+                return
+            try:
+                if window.events.closed.is_set():
+                    return
+            except Exception:
+                pass
+            time.sleep(1.2)
+        _set_job(platform, "fail", "验证码登录未完成：验证码可能不正确或已过期", kind="sms")
+    finally:
+        with _LOCK:
+            cur = _WINDOWS.get(platform)
+            if cur and cur.get("window") is window:
+                _WINDOWS.pop(platform, None)
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
+
+def start_sms_login(data_dir: str, platform: str, phone: str) -> dict:
+    global _LAST_ERROR
+    if platform not in PLATFORMS:
+        return {"ok": False, "message": "未知平台"}
+    if not LOGIN_METHODS.get(platform, {}).get("sms"):
+        return {"ok": False, "message": "该平台暂不支持应用内短信验证码登录"}
+    phone = (phone or "").strip()
+    if not phone:
+        return {"ok": False, "message": "请填写手机号"}
+    with _LOCK:
+        if _WINDOWS.get(platform):
+            return {"ok": True, "active": True, "message": "该平台已有登录任务在运行，请稍候"}
+        _JOBS[platform] = {"state": "running", "message": "正在准备短信登录…", "kind": "sms", "started": iso_bj()}
+    if not _webview_ready():
+        _set_job(platform, "fail", "当前版本无法创建内置登录窗口", kind="sms")
+        return {"ok": False, "message": "当前版本无法创建内置登录窗口"}
+    conf = PLATFORMS[platform]
+    try:
+        import webview
+        window = webview.create_window(
+            "日常小助手 · 正在登录%s" % conf["name"], "about:blank",
+            width=1000, height=760, minimized=True, min_size=(800, 500), text_select=True)
+        if window is None:
+            raise RuntimeError("窗口创建被取消")
+        with _LOCK:
+            _WINDOWS[platform] = {"window": window, "mode": "sms"}
+        threading.Thread(target=_sms_worker, args=(platform, data_dir, window, phone),
+                         daemon=True, name="platform-sms-" + platform).start()
+        _LAST_ERROR = ""
+        return {"ok": True, "active": True, "message": "正在发送%s短信验证码…" % conf["name"]}
+    except Exception as e:
+        _LAST_ERROR = "%s: %s" % (type(e).__name__, str(e)[:120])
+        _set_job(platform, "fail", "打开登录窗口失败：%s" % _LAST_ERROR, kind="sms")
+        return {"ok": False, "message": "打开登录窗口失败：%s" % _LAST_ERROR}
+
+
+def submit_login_code(data_dir: str, platform: str, code: str) -> dict:
+    if platform not in PLATFORMS:
+        return {"ok": False, "message": "未知平台"}
+    code = (code or "").strip()
+    if not code:
+        return {"ok": False, "message": "请填写验证码"}
+    with _LOCK:
+        job = _JOBS.get(platform) or {}
+        if job.get("state") != "need_code":
+            return {"ok": False, "message": "当前没有等待验证码的登录任务"}
+        job["code"] = code
+        job["state"] = "running"
+        job["message"] = "正在提交验证码…"
+        job["kind"] = job.get("kind") or "sms"
+    return {"ok": True, "message": "正在提交验证码…"}
+
+
+def _qr_worker(platform: str, data_dir: str, window) -> None:
+    try:
+        reason = _prepare_hidden_login(window, platform, settle=3.0)
+        if reason:
+            _set_job(platform, "fail", reason, kind="qr")
+            return
+        if _logged_now(window, platform):
+            _set_job(platform, "ok", "当前已是登录状态，无需再次登录")
+            return
+        if platform == "douyin":
+            for _ in range(10):
+                try:
+                    window.evaluate_js(_QR_PREPARE_JS["douyin"])
+                except Exception:
+                    pass
+                time.sleep(1.6)
+            try:
+                window.evaluate_js(_QR_TAB_JS)
+            except Exception:
+                pass
+            time.sleep(3.0)
+        qr = None
+        for _ in range(15):
+            try:
+                qr = window.evaluate_js(_QR_EXTRACT_JS)
+            except Exception:
+                qr = None
+            if isinstance(qr, dict) and qr.get("ok") and qr.get("data"):
+                break
+            time.sleep(1.0)
+        if not isinstance(qr, dict) or not qr.get("ok") or not qr.get("data"):
+            _set_job(platform, "fail", "没有取到平台二维码；可改用下方「官方页面登录」", kind="qr")
+            return
+        _set_job(platform, "qr", "请用%s App 扫描二维码，扫码后这里会自动检测" % PLATFORMS[platform]["name"],
+                 kind="qr", qr=qr.get("data"))
+        deadline = time.time() + 150
+        while time.time() < deadline:
+            if _logged_now(window, platform):
+                _apply_cookies(data_dir, platform, window, "qr")
+                _set_job(platform, "ok", "登录成功")
+                return
+            try:
+                if window.events.closed.is_set():
+                    return
+            except Exception:
+                pass
+            time.sleep(1.2)
+        _set_job(platform, "fail", "扫码登录未完成：二维码可能已过期，请刷新", kind="qr")
+    finally:
+        with _LOCK:
+            cur = _WINDOWS.get(platform)
+            if cur and cur.get("window") is window:
+                _WINDOWS.pop(platform, None)
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
+
+def start_qr_login(data_dir: str, platform: str) -> dict:
+    global _LAST_ERROR
+    if platform not in PLATFORMS:
+        return {"ok": False, "message": "未知平台"}
+    if not LOGIN_METHODS.get(platform, {}).get("qr"):
+        return {"ok": False, "message": "该平台暂不支持应用内二维码登录，请改用官方页面"}
+    with _LOCK:
+        if _WINDOWS.get(platform):
+            return {"ok": True, "active": True, "message": "该平台已有登录任务在运行，请稍候"}
+        _JOBS[platform] = {"state": "running", "message": "正在生成二维码…", "kind": "qr", "started": iso_bj()}
+    if not _webview_ready():
+        _set_job(platform, "fail", "当前版本无法创建内置登录窗口", kind="qr")
+        return {"ok": False, "message": "当前版本无法创建内置登录窗口"}
+    conf = PLATFORMS[platform]
+    try:
+        import webview
+        window = webview.create_window(
+            "日常小助手 · 正在登录%s" % conf["name"], "about:blank",
+            width=1000, height=760, minimized=True, min_size=(800, 500), text_select=True)
+        if window is None:
+            raise RuntimeError("窗口创建被取消")
+        with _LOCK:
+            _WINDOWS[platform] = {"window": window, "mode": "qr"}
+        threading.Thread(target=_qr_worker, args=(platform, data_dir, window),
+                         daemon=True, name="platform-qr-" + platform).start()
+        _LAST_ERROR = ""
+        return {"ok": True, "active": True, "message": "正在准备%s二维码…" % conf["name"]}
+    except Exception as e:
+        _LAST_ERROR = "%s: %s" % (type(e).__name__, str(e)[:120])
+        _set_job(platform, "fail", "打开登录窗口失败：%s" % _LAST_ERROR, kind="qr")
+        return {"ok": False, "message": "打开登录窗口失败：%s" % _LAST_ERROR}
+
+
+def cancel_login(data_dir: str, platform: str) -> dict:
+    if platform not in PLATFORMS:
+        return {"ok": False, "message": "未知平台"}
+    with _LOCK:
+        _JOBS.pop(platform, None)
+        cur = _WINDOWS.pop(platform, None)
+    window = (cur or {}).get("window")
+    if window is not None:
+        try:
+            window.destroy()
+        except Exception:
+            pass
+    return {"ok": True, "message": "已取消本次登录"}
+
+
 def start_password_login(data_dir: str, platform: str, username: str, password: str) -> dict:
     """应用内账号密码登录：校验参数后开一个隐藏 WebView2 后台提交，不把页面给用户看。"""
     global _LAST_ERROR
     if platform not in PLATFORMS:
         return {"ok": False, "message": "未知平台"}
+    if not LOGIN_METHODS.get(platform, {}).get("password"):
+        return {"ok": False, "message": "该平台请使用短信验证码或扫码登录"}
     username = (username or "").strip()
     if not username or not password:
         return {"ok": False, "message": "请填写账号和密码"}
     with _LOCK:
         if _WINDOWS.get(platform):
             return {"ok": True, "active": True, "message": "该平台已有登录窗口在运行，请稍候"}
-        _JOBS[platform] = {"state": "running", "message": "正在准备登录…", "started": iso_bj()}
+        _JOBS[platform] = {"state": "running", "message": "正在准备登录…", "kind": "password", "started": iso_bj()}
     if not _webview_ready():
         _set_job(platform, "fail", "当前版本无法创建内置登录窗口，请确认 WebView2 运行库已安装")
         return {"ok": False, "message": "当前版本无法创建内置登录窗口"}

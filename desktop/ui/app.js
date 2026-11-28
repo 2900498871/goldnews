@@ -43,6 +43,14 @@
 
   /* ---------------- 平台登录 ---------------- */
   var PLAT = null, PLAT_TIMER = null, PLAT_CUR = '', PLAT_JOB_TIMER = null;
+  var PLAT_METHOD = '', PLAT_JOB_ACTIVE = false;
+  var PLAT_METHODS_FALLBACK = {
+    weibo: { password: true, sms: true, qr: true },
+    baidu: { password: true, sms: false, qr: true },
+    douyin: { password: false, sms: true, qr: true },
+    bilibili: { password: true, sms: false, qr: true },
+    zhihu: { password: true, sms: true, qr: false }
+  };
   var PLAT_META = [
     { key: 'weibo', name: '微博', short: '微', color: '#E6162D' },
     { key: 'baidu', name: '百度', short: '百', color: '#2932E1' },
@@ -56,6 +64,8 @@
   function platformState(p) {
     if (!p) return '未登录';
     if (p.job && p.job.state === 'running') return p.job.message || '正在登录…';
+    if (p.job && p.job.state === 'need_code') return p.job.message || '等待短信验证码';
+    if (p.job && p.job.state === 'qr') return p.job.message || '等待扫码登录';
     if (p.active) return p.mode === 'logout' ? '正在退出…' : '登录窗口已打开，完成后关闭即可';
     if (p.logged_in) return '已登录' + (p.last_login ? ' · 上次 ' + fmtBj(p.last_login) : '');
     if (p.job && p.job.state === 'fail' && p.job.message) return p.job.message;
@@ -71,10 +81,11 @@
       var p = (PLAT.platforms || []).filter(function (x) { return x.key === m.key; })[0] || {};
       var active = !!p.active, logged = !!p.logged_in;
       var jobRunning = !!(p.job && p.job.state === 'running');
+      var jobPending = !!(p.job && (p.job.state === 'running' || p.job.state === 'need_code' || p.job.state === 'qr'));
       var jobFailed = !!(p.job && p.job.state === 'fail' && p.job.message);
-      var loginTxt = jobRunning ? '登录中…' : (active ? (p.mode === 'logout' ? '退出中…' : '请完成登录') : '登录');
+      var loginTxt = jobPending ? '登录中…' : (active ? (p.mode === 'logout' ? '退出中…' : '请完成登录') : '登录');
       var loginBtn = '<button class="btn sm pri" onclick="openPlatformLogin(\'' + m.key + '\')"' +
-        (active || jobRunning || PLAT.supported === false ? ' disabled' : '') + '>' + loginTxt + '</button>';
+        (active || jobPending || PLAT.supported === false ? ' disabled' : '') + '>' + loginTxt + '</button>';
       var outBtn = logged || (active && p.mode === 'logout')
         ? '<button class="btn sm" onclick="platformLogout(\'' + m.key + '\')"' +
           (active && p.mode === 'logout' ? ' disabled' : '') + '>退出账号</button>' : '';
@@ -83,7 +94,7 @@
       return '<div class="prow"><div><div class="pname">' + esc(m.name) + '</div>' +
         '<div class="pstate ' + (logged ? 'on' : 'off') + '">' +
         (logged ? '<b>已登录</b>' : '<b>未登录</b>') +
-        (active || jobRunning || jobFailed ? ' · ' + esc(platformState(p)) : (p.last_login ? ' · 上次 ' + esc(fmtBj(p.last_login)) : '')) +
+        (active || jobPending || jobFailed ? ' · ' + esc(platformState(p)) : (p.last_login ? ' · 上次 ' + esc(fmtBj(p.last_login)) : '')) +
         '</div></div><div class="pact">' + loginBtn + outBtn + clearBtn + '</div></div>';
     }).join('');
   }
@@ -145,44 +156,133 @@
   function renderPlatTabs() {
     if ($('platTabs')) $('platTabs').innerHTML = platTabsHtml();
   }
+  function platMethods(key) {
+    var p = ((PLAT && PLAT.platforms) || []).filter(function (x) { return x.key === key; })[0] || {};
+    return p.methods || PLAT_METHODS_FALLBACK[key] || { password: true };
+  }
+  function renderPlatMethods() {
+    if (!$('platMethods') || !PLAT_CUR) return;
+    var m = platMethods(PLAT_CUR);
+    var labels = { password: '账号密码', sms: '手机验证码', qr: '扫码登录' };
+    var html = '';
+    ['password', 'sms', 'qr'].forEach(function (k) {
+      if (!m[k]) return;
+      html += '<button type="button" class="' + (k === PLAT_METHOD ? 'on' : '') +
+        '" onclick="setPlatMethod(\'' + k + '\')">' + labels[k] + '</button>';
+    });
+    $('platMethods').innerHTML = html;
+  }
+  function setPlatMethod(method) {
+    if (!PLAT_CUR) return;
+    var m = platMethods(PLAT_CUR);
+    if (!m[method]) method = m.password ? 'password' : (m.sms ? 'sms' : 'qr');
+    PLAT_METHOD = method;
+    renderPlatMethods();
+    if ($('platPassPane')) $('platPassPane').style.display = method === 'password' ? 'flex' : 'none';
+    if ($('platSmsPane')) $('platSmsPane').style.display = method === 'sms' ? 'flex' : 'none';
+    if ($('platQrPane')) $('platQrPane').style.display = method === 'qr' ? 'flex' : 'none';
+    if (method === 'qr' && $('platQrImg') && !$('platQrImg').getAttribute('src')) {
+      if ($('platQrHint')) $('platQrHint').textContent = '点击下面按钮生成二维码，用对应平台 App 扫码。';
+    }
+    if (method === 'password' && $('platUser')) setTimeout(function () { $('platUser').focus(); }, 60);
+    if (method === 'sms' && $('platPhone')) setTimeout(function () { $('platPhone').focus(); }, 60);
+  }
+  function platSetBusy(busy) {
+    PLAT_JOB_ACTIVE = !!busy;
+    ['platSubmit', 'platSend', 'platQrStart', 'platOfficial', 'platCodeSubmit'].forEach(function (id) {
+      if ($(id)) $(id).disabled = !!busy;
+    });
+  }
+  function clearPlatFields() {
+    ['platUser', 'platPass', 'platPhone', 'platCode'].forEach(function (id) { if ($(id)) $(id).value = ''; });
+    if ($('platQrImg')) {
+      $('platQrImg').removeAttribute('src');
+      $('platQrImg').className = '';
+    }
+    if ($('platQrHint')) $('platQrHint').textContent = '点击下面按钮生成二维码，用对应平台 App 扫码。';
+    platSetBusy(false);
+  }
   function openPlatformLogin(key) {
     var m = platformMeta(key);
     PLAT_CUR = key;
+    clearPlatFields();
     if ($('platIcon')) {
       $('platIcon').textContent = m.short;
       $('platIcon').style.background = 'linear-gradient(135deg,' + m.color + ',' + m.color + 'CC)';
     }
     if ($('platTitle')) $('platTitle').textContent = '登录' + m.name;
     renderPlatTabs();
-    if ($('platUser')) $('platUser').value = '';
-    if ($('platPass')) $('platPass').value = '';
-    platMsg('');
     var p = ((PLAT && PLAT.platforms) || []).filter(function (x) { return x.key === key; })[0] || {};
+    var methods = platMethods(key);
+    var startMethod = methods.password ? 'password' : (methods.qr ? 'qr' : 'sms');
+    if (p.job && p.job.kind) {
+      if (p.job.kind === 'sms') startMethod = 'sms';
+      else if (p.job.kind === 'qr') startMethod = 'qr';
+      else if (p.job.kind === 'password' && methods.password) startMethod = 'password';
+    }
+    if (p.job && p.job.state === 'need_code') startMethod = 'sms';
+    if (p.job && p.job.state === 'qr') startMethod = 'qr';
+    setPlatMethod(startMethod);
+    platMsg('');
+    $('platModal').className = 'modal-mask show';
     if (p.job && p.job.state === 'running') {
       platMsg(p.job.message || '正在登录…');
+      platSetBusy(true);
+      startPlatformJobPoll(key);
+    } else if (p.job && p.job.state === 'need_code') {
+      platMsg(p.job.message || '请输入短信验证码');
+      platSetBusy(false);
+      if ($('platCodeSubmit')) $('platCodeSubmit').disabled = false;
+      startPlatformJobPoll(key);
+    } else if (p.job && p.job.state === 'qr') {
+      platMsg(p.job.message || '请扫码登录');
+      platSetBusy(true);
+      showPlatformQr(p.job.qr);
       startPlatformJobPoll(key);
     } else if (p.job && p.job.state === 'fail' && p.job.message) {
       platMsg(p.job.message, 'err');
+      if (p.job.kind === 'qr') showPlatformQr('');
     }
-    if ($('platSubmit')) $('platSubmit').disabled = !!(p.job && p.job.state === 'running');
-    $('platModal').className = 'modal-mask show';
-    setTimeout(function () { if ($('platUser')) $('platUser').focus(); }, 80);
+    if (startMethod === 'qr' && (!p.job || !p.job.state) && PLAT_CUR === 'douyin') {
+      setTimeout(function () { if (PLAT_CUR === 'douyin') startPlatformQr(); }, 120);
+    }
   }
   function closePlatformLogin() {
-    if ($('platUser')) $('platUser').value = '';
-    if ($('platPass')) $('platPass').value = '';
+    var key = PLAT_CUR;
+    if (PLAT_JOB_ACTIVE && key) {
+      api('/api/platforms/cancel', 'POST', { platform: key }).catch(function () {});
+    }
+    clearPlatFields();
     PLAT_CUR = '';
+    PLAT_METHOD = '';
     stopPlatformJobPoll();
     $('platModal').className = 'modal-mask';
+    setTimeout(function () { loadPlatforms(true); }, 350);
   }
   function platPick(key) {
     if (!key) return;
     var p = ((PLAT && PLAT.platforms) || []).filter(function (x) { return x.key === key; })[0] || {};
-    if (p.job && p.job.state === 'running') { toast('该平台正在登录，请稍候'); return; }
+    if (p.job && p.job.state === 'running' && key !== PLAT_CUR) { toast('该平台正在登录，请稍候'); return; }
+    if (PLAT_JOB_ACTIVE && PLAT_CUR && PLAT_CUR !== key) {
+      api('/api/platforms/cancel', 'POST', { platform: PLAT_CUR }).catch(function () {});
+      PLAT_JOB_ACTIVE = false;
+    }
     openPlatformLogin(key);
   }
   function stopPlatformJobPoll() {
     if (PLAT_JOB_TIMER) { clearInterval(PLAT_JOB_TIMER); PLAT_JOB_TIMER = null; }
+  }
+  function showPlatformQr(data) {
+    if (!$('platQrImg')) return;
+    if (data) {
+      $('platQrImg').src = data;
+      $('platQrImg').className = 'show';
+      if ($('platQrHint')) $('platQrHint').textContent = '请用对应平台 App 扫码；二维码过期后可点下面按钮刷新。';
+    } else {
+      $('platQrImg').removeAttribute('src');
+      $('platQrImg').className = '';
+      if ($('platQrHint')) $('platQrHint').textContent = '还没有二维码，点下面按钮生成。';
+    }
   }
   function startPlatformJobPoll(key) {
     stopPlatformJobPoll();
@@ -191,21 +291,37 @@
       api('/api/platforms/status').then(function (r) {
         if (!ok(r)) return;
         var p = ((r.data || {}).platforms || []).filter(function (x) { return x.key === key; })[0] || {};
-        if (!p.job) return;
+        if (!p.job || !p.job.state) return;
         if (p.job.state === 'running') {
           platMsg(p.job.message || '正在登录…');
-          if ($('platSubmit')) $('platSubmit').disabled = true;
+          platSetBusy(true);
+          if (p.job.kind === 'sms') setPlatMethod('sms');
+          if (p.job.kind === 'qr') setPlatMethod('qr');
+        } else if (p.job.state === 'need_code') {
+          setPlatMethod('sms');
+          platMsg(p.job.message || '请输入短信验证码');
+          platSetBusy(false);
+          if ($('platCodeSubmit')) $('platCodeSubmit').disabled = false;
+          if ($('platCode')) setTimeout(function () { $('platCode').focus(); }, 50);
+        } else if (p.job.state === 'qr') {
+          setPlatMethod('qr');
+          platMsg(p.job.message || '请扫码登录');
+          platSetBusy(true);
+          showPlatformQr(p.job.qr || '');
         } else if (p.job.state === 'ok') {
+          PLAT_JOB_ACTIVE = false;
           platMsg(p.job.message || '登录成功', 'ok');
           stopPlatformJobPoll();
           loadPlatforms(true);
           toast(platformMeta(key).name + '登录成功');
           setTimeout(closePlatformLogin, 900);
         } else if (p.job.state === 'fail') {
+          PLAT_JOB_ACTIVE = false;
           platMsg(p.job.message || '登录未完成', 'err');
-          if ($('platSubmit')) $('platSubmit').disabled = false;
+          platSetBusy(false);
           stopPlatformJobPoll();
           loadPlatforms(true);
+          if (p.job.kind === 'qr') { setPlatMethod('qr'); showPlatformQr(''); }
         }
       }).catch(function () {});
     }, 1200);
@@ -216,27 +332,107 @@
     var pass = ($('platPass') && $('platPass').value || '');
     if (!user || !pass) { platMsg('请填写账号和密码', 'err'); return; }
     if ($('platPass')) $('platPass').value = '';
-    if ($('platSubmit')) $('platSubmit').disabled = true;
+    platSetBusy(true);
     platMsg('正在后台登录，请稍候…');
     api('/api/platforms/login_password', 'POST', { platform: PLAT_CUR, username: user, password: pass }).then(function (r) {
       var d = (r && r.data) || {};
       if (!ok(r)) {
         platMsg(d.message || '登录没有启动', 'err');
-        if ($('platSubmit')) $('platSubmit').disabled = false;
+        platSetBusy(false);
         return;
       }
       platMsg(d.message || '正在后台登录…');
       startPlatformJobPoll(PLAT_CUR);
     }).catch(function () {
       platMsg('登录请求失败，请重试', 'err');
-      if ($('platSubmit')) $('platSubmit').disabled = false;
+      platSetBusy(false);
     });
+  }
+  function startPlatformSms() {
+    if (!PLAT_CUR) return;
+    var phone = ($('platPhone') && $('platPhone').value || '').replace(/[\s-]/g, '');
+    if (!phone) { platMsg('请填写手机号', 'err'); return; }
+    if ($('platCode')) $('platCode').value = '';
+    setPlatMethod('sms');
+    platSetBusy(true);
+    platMsg('正在向平台请求短信验证码…');
+    api('/api/platforms/login_sms', 'POST', { platform: PLAT_CUR, phone: phone }).then(function (r) {
+      var d = (r && r.data) || {};
+      if (!ok(r)) {
+        platMsg(d.message || '短信验证码登录没有启动', 'err');
+        platSetBusy(false);
+        return;
+      }
+      platMsg(d.message || '正在发送验证码…');
+      startPlatformJobPoll(PLAT_CUR);
+    }).catch(function () {
+      platMsg('短信登录请求失败，请重试', 'err');
+      platSetBusy(false);
+    });
+  }
+  function submitPlatformCode() {
+    if (!PLAT_CUR) return;
+    var code = ($('platCode') && $('platCode').value || '').trim();
+    if (!code) { platMsg('请输入短信验证码', 'err'); return; }
+    platSetBusy(true);
+    platMsg('正在提交验证码…');
+    api('/api/platforms/login_code', 'POST', { platform: PLAT_CUR, code: code }).then(function (r) {
+      var d = (r && r.data) || {};
+      if (!ok(r)) {
+        platMsg(d.message || '提交验证码失败', 'err');
+        platSetBusy(false);
+        if ($('platCodeSubmit')) $('platCodeSubmit').disabled = false;
+        return;
+      }
+      platMsg(d.message || '正在提交验证码…');
+      startPlatformJobPoll(PLAT_CUR);
+    }).catch(function () {
+      platMsg('验证码请求失败，请重试', 'err');
+      platSetBusy(false);
+    });
+  }
+  function startPlatformQr() {
+    if (!PLAT_CUR) return;
+    setPlatMethod('qr');
+    showPlatformQr('');
+    platSetBusy(true);
+    platMsg('正在生成平台二维码…');
+    api('/api/platforms/login_qr', 'POST', { platform: PLAT_CUR }).then(function (r) {
+      var d = (r && r.data) || {};
+      if (!ok(r)) {
+        platMsg(d.message || '二维码登录没有启动', 'err');
+        platSetBusy(false);
+        return;
+      }
+      platMsg(d.message || '正在准备二维码…');
+      startPlatformJobPoll(PLAT_CUR);
+    }).catch(function () {
+      platMsg('二维码请求失败，请重试', 'err');
+      platSetBusy(false);
+    });
+  }
+  function openPlatformOfficial() {
+    if (!PLAT_CUR) return;
+    var key = PLAT_CUR;
+    api('/api/platforms/login_official', 'POST', { platform: key }).then(function (r) {
+      var d = (r && r.data) || {};
+      if (!ok(r)) { platMsg(d.message || '官方页面没有打开', 'err'); return; }
+      PLAT_JOB_ACTIVE = false;
+      closePlatformLogin();
+      toast(d.message || '已打开官方登录页');
+    }).catch(function () { platMsg('打开官方页面失败，请重试', 'err'); });
   }
   window.loadPlatforms = loadPlatforms;
   window.platformLogout = platformLogout;
   window.platformClear = platformClear;
   window.openPlatformLogin = openPlatformLogin;
   window.closePlatformLogin = closePlatformLogin;
+  window.setPlatMethod = setPlatMethod;
+  window.submitPlatformLogin = submitPlatformLogin;
+  window.startPlatformSms = startPlatformSms;
+  window.submitPlatformCode = submitPlatformCode;
+  window.startPlatformQr = startPlatformQr;
+  window.openPlatformOfficial = openPlatformOfficial;
   window.platPick = platPick;
   window.submitPlatformLogin = submitPlatformLogin;
   window.startPlatformPoll = startPlatformPoll;

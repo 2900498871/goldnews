@@ -435,7 +435,7 @@
 
         <div class="card mt"><div class="ch"><h3>平台登录</h3><span class="sub">登录后才能读取微博 / 百度 / 抖音 / B站 / 知乎热搜正文</span></div>
           <div id="platformList" class="plist"><div class="empty">正在读取登录状态…</div></div>
-          <div class="hint mt">登录面板是程序自己的界面，账号密码只用于本次登录，不保存到配置或状态文件。平台若要求验证码/短信确认，会提示登录未完成；退出账号仍打开平台官方退出页并清除本机状态。</div>
+          <div class="hint mt">登录面板是程序自己的界面，支持账号密码、手机验证码和扫码；账号密码只用于本次登录，不保存到配置或状态文件。平台若要求额外验证，会提示登录未完成；退出账号仍打开平台官方退出页并清除本机状态。</div>
         </div>
 
         <div class="card mt"><div class="ch"><h3>存储与清理</h3><span class="sub">日志自动轮转；正文缓存按天清理，Markdown 文档永久保留</span></div>
@@ -522,15 +522,32 @@
       <button class="plclose" onclick="closePlatformLogin()" title="关闭">×</button>
     </div>
     <div class="pltabs" id="platTabs"></div>
-    <div class="plform">
+    <div class="plmethods" id="platMethods"></div>
+    <div class="plpane" id="platPassPane">
       <label class="pllabel" for="platUser">账号 / 手机号</label>
       <input id="platUser" class="plin" autocomplete="off" placeholder="请输入账号、手机号或邮箱">
       <label class="pllabel" for="platPass">密码</label>
       <input id="platPass" class="plin" type="password" autocomplete="current-password" placeholder="请输入密码">
-      <div id="platMsg" class="plmsg"></div>
-      <div class="btnrow"><button class="btn pri" id="platSubmit" onclick="submitPlatformLogin()">登录</button><button class="btn" onclick="closePlatformLogin()">取消</button></div>
-      <div class="hint mt">账号密码只用于本次登录，不保存到配置或状态文件。平台若要求验证码/短信确认，会提示登录未完成。</div>
+      <div class="btnrow"><button class="btn pri" id="platSubmit" onclick="submitPlatformLogin()">登录</button></div>
     </div>
+    <div class="plpane" id="platSmsPane" style="display:none">
+      <label class="pllabel" for="platPhone">手机号</label>
+      <div class="plsend">
+        <input id="platPhone" class="plin" autocomplete="off" inputmode="tel" placeholder="请输入手机号">
+        <button class="btn sm" id="platSend" onclick="startPlatformSms()">发送验证码</button>
+      </div>
+      <label class="pllabel" for="platCode">短信验证码</label>
+      <input id="platCode" class="plin" autocomplete="off" inputmode="numeric" placeholder="请输入手机收到的验证码">
+      <div class="btnrow"><button class="btn pri" id="platCodeSubmit" onclick="submitPlatformCode()">提交验证码</button></div>
+    </div>
+    <div class="plpane" id="platQrPane" style="display:none">
+      <div class="plqrhint" id="platQrHint">点击下面按钮生成二维码，用对应平台 App 扫码。</div>
+      <div class="plqrbox"><img id="platQrImg" alt="登录二维码" referrerpolicy="no-referrer"></div>
+      <div class="btnrow"><button class="btn sm" id="platQrStart" onclick="startPlatformQr()">生成 / 刷新二维码</button></div>
+    </div>
+    <div id="platMsg" class="plmsg"></div>
+    <div class="btnrow"><button class="btn" id="platOfficial" onclick="openPlatformOfficial()">改用官方页面登录</button><button class="btn" onclick="closePlatformLogin()">取消</button></div>
+    <div class="hint mt">账号密码只用于本次登录，不保存到配置或状态文件。短信验证码由平台发送；平台仍要求图形验证码或风控确认时，会提示登录未完成。</div>
   </div>
 </div>
 <div class="modal-mask" id="mailModal">
