@@ -1083,7 +1083,8 @@
 
   /* ---------------- 退出本端程序 ---------------- */
   function quitApp() {
-    if (!window.confirm('退出本端程序？后台定时任务也会一并停止。')) return;
+    /* 官方页作为子窗口时，原生 confirm() 会变成挂在主窗口上的模态框，容易被官方页遮住而像是“卡死”。
+       这里直接退出，不再弹原生确认框。 */
     var done = function () { $('exitMask').className = 'exitmask show'; };
     api('/api/window', 'POST', { action: 'quit' }).then(function (r) {
       if (!r.data || !r.data.ok) {
